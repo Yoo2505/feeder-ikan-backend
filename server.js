@@ -27,31 +27,76 @@ let feederStatus = {
 };
 
 let schedules = [
-  { index: 0, aktif: false, jam: 7, menit: 0, speed: 50, duration: 10 },
-  { index: 1, aktif: false, jam: 12, menit: 0, speed: 50, duration: 10 },
-  { index: 2, aktif: false, jam: 18, menit: 0, speed: 50, duration: 10 }
+  {
+    index: 0,
+    aktif: false,
+    jam: 7,
+    menit: 0,
+    speed: 50,
+    duration: 10
+  },
+  {
+    index: 1,
+    aktif: false,
+    jam: 12,
+    menit: 0,
+    speed: 50,
+    duration: 10
+  },
+  {
+    index: 2,
+    aktif: false,
+    jam: 18,
+    menit: 0,
+    speed: 50,
+    duration: 10
+  }
 ];
 
 const mqttClient = mqtt.connect(MQTT_HOST, {
   port: MQTT_PORT,
   username: MQTT_USER,
   password: MQTT_PASSWORD,
-  clientId: `railway-${FEEDER_ID.toLowerCase()}-${Math.random().toString(16).slice(2, 10)}`,
+
+  clientId:
+    `railway-${FEEDER_ID.toLowerCase()}-${Math.random()
+      .toString(16)
+      .slice(2, 10)}`,
+
   reconnectPeriod: 5000,
   connectTimeout: 10000,
   clean: true
 });
 
 mqttClient.on('connect', () => {
-  console.log('MQTT TERHUBUNG ke RabbitMQ');
 
-  mqttClient.subscribe(STATUS_TOPIC, { qos: 1 }, (err) => {
-    if (err) {
-      console.error('Gagal subscribe status:', err.message);
-    } else {
-      console.log('Subscribe:', STATUS_TOPIC);
+  console.log(
+    'MQTT TERHUBUNG ke RabbitMQ'
+  );
+
+  mqttClient.subscribe(
+    STATUS_TOPIC,
+    { qos: 1 },
+    (err) => {
+
+      if (err) {
+
+        console.error(
+          'Gagal subscribe status:',
+          err.message
+        );
+
+      } else {
+
+        console.log(
+          'Subscribe:',
+          STATUS_TOPIC
+        );
+
+      }
+
     }
-  });
+  );
 
   publishCommand({
     action: 'status',
@@ -62,52 +107,93 @@ mqttClient.on('connect', () => {
     action: 'schedule_get',
     device: FEEDER_ID
   });
+
 });
 
 mqttClient.on('reconnect', () => {
-  console.log('Mencoba reconnect MQTT...');
+
+  console.log(
+    'Mencoba reconnect MQTT...'
+  );
+
 });
 
 mqttClient.on('close', () => {
-  console.log('MQTT terputus');
+
+  console.log(
+    'MQTT terputus'
+  );
+
 });
 
 mqttClient.on('error', (err) => {
-  console.error('MQTT error:', err.message);
+
+  console.error(
+    'MQTT error:',
+    err.message
+  );
+
 });
 
-mqttClient.on('message', (topic, message) => {
-  if (topic !== STATUS_TOPIC) return;
+mqttClient.on(
+  'message',
+  (topic, message) => {
 
-  const raw = message.toString();
-
-  console.log('STATUS ESP32:', raw);
-
-  try {
-    const data = JSON.parse(raw);
-
-    feederStatus = {
-      ...feederStatus,
-      ...data,
-      lastUpdate: new Date().toISOString()
-    };
-
-    if (
-      data.status === 'schedule_state' &&
-      Array.isArray(data.schedules)
-    ) {
-      schedules = data.schedules.map(normalizeSchedule);
+    if (topic !== STATUS_TOPIC) {
+      return;
     }
-  } catch (err) {
-    console.error(
-      'Payload status bukan JSON valid:',
-      err.message
+
+    const raw =
+      message.toString();
+
+    console.log(
+      'STATUS ESP32:',
+      raw
     );
+
+    try {
+
+      const data =
+        JSON.parse(raw);
+
+      feederStatus = {
+        ...feederStatus,
+        ...data,
+        lastUpdate:
+          new Date().toISOString()
+      };
+
+      if (
+        data.status ===
+          'schedule_state' &&
+        Array.isArray(
+          data.schedules
+        )
+      ) {
+
+        schedules =
+          data.schedules.map(
+            normalizeSchedule
+          );
+
+      }
+
+    } catch (err) {
+
+      console.error(
+        'Payload status bukan JSON valid:',
+        err.message
+      );
+
+    }
+
   }
-});
+);
 
 function publishCommand(payload) {
+
   if (!mqttClient.connected) {
+
     console.log(
       'MQTT belum terhubung. Command tidak dikirim:',
       payload
@@ -116,24 +202,31 @@ function publishCommand(payload) {
     return false;
   }
 
-  const message = JSON.stringify(payload);
+  const message =
+    JSON.stringify(payload);
 
   mqttClient.publish(
     COMMAND_TOPIC,
     message,
     { qos: 1 },
     (err) => {
+
       if (err) {
+
         console.error(
           'Gagal publish MQTT:',
           err.message
         );
+
       } else {
+
         console.log(
           'COMMAND MQTT:',
           message
         );
+
       }
+
     }
   );
 
@@ -141,11 +234,16 @@ function publishCommand(payload) {
 }
 
 function normalizeSchedule(item) {
+
   return {
-    index: Number(item.index),
+
+    index:
+      Number(item.index),
 
     aktif:
-      Boolean(Number(item.aktif)),
+      Boolean(
+        Number(item.aktif)
+      ),
 
     jam:
       clamp(
@@ -174,37 +272,55 @@ function normalizeSchedule(item) {
         1,
         3600
       )
+
   };
+
 }
 
-function clamp(value, min, max) {
-  if (!Number.isFinite(value)) {
+function clamp(
+  value,
+  min,
+  max
+) {
+
+  if (
+    !Number.isFinite(value)
+  ) {
+
     return min;
+
   }
 
   return Math.min(
     max,
     Math.max(min, value)
   );
+
 }
 
 function validIndex(index) {
+
   return (
     Number.isInteger(index) &&
     index >= 0 &&
     index < 3
   );
+
 }
 
 function page() {
+
   const scheduleCards =
     schedules
-      .map((s) => `
+      .map(
+        (s) => `
+
     <div class="card schedule-card">
 
       <div class="schedule-head">
 
         <div>
+
           <div class="eyebrow">
             Jadwal ${s.index + 1}
           </div>
@@ -212,6 +328,7 @@ function page() {
           <h3>
             Waktu Pemberian Pakan
           </h3>
+
         </div>
 
         <label class="switch">
@@ -228,35 +345,17 @@ function page() {
 
       </div>
 
-      <div class="grid2">
+      <label>
 
-        <label>
-          Jam
+        Waktu Pemberian Pakan
 
-          <input
-            id="jam${s.index}"
-            type="number"
-            min="0"
-            max="23"
-            value="${s.jam}"
-          >
+        <input
+          id="time${s.index}"
+          type="time"
+          value="${String(s.jam).padStart(2, '0')}:${String(s.menit).padStart(2, '0')}"
+        >
 
-        </label>
-
-        <label>
-          Menit
-
-          <input
-            id="menit${s.index}"
-            type="number"
-            min="0"
-            max="59"
-            value="${s.menit}"
-          >
-
-        </label>
-
-      </div>
+      </label>
 
       <label>
 
@@ -272,7 +371,12 @@ function page() {
           min="10"
           max="100"
           value="${s.speed}"
-          oninput="updateScheduleSpeed(${s.index}, this.value)"
+          oninput="
+            updateScheduleSpeed(
+              ${s.index},
+              this.value
+            )
+          "
         >
 
       </label>
@@ -293,7 +397,11 @@ function page() {
 
       <button
         class="primary"
-        onclick="simpanJadwal(${s.index})"
+        onclick="
+          simpanJadwal(
+            ${s.index}
+          )
+        "
       >
         Simpan Jadwal ${s.index + 1}
       </button>
@@ -304,11 +412,14 @@ function page() {
       ></div>
 
     </div>
-  `)
+
+  `
+      )
       .join('');
 
   const statusText =
-    feederStatus.status || 'offline';
+    feederStatus.status ||
+    'offline';
 
   const online =
     statusText !== 'offline';
@@ -337,261 +448,450 @@ function page() {
 }
 
 body {
+
   margin: 0;
-  font-family: Inter, Arial, sans-serif;
+
+  font-family:
+    Inter,
+    Arial,
+    sans-serif;
+
   background: #f4f7fb;
+
   color: #172033;
+
 }
 
 .top {
+
   background: #fff;
-  border-bottom: 1px solid #e5eaf2;
+
+  border-bottom:
+    1px solid #e5eaf2;
+
   position: sticky;
+
   top: 0;
+
   z-index: 5;
+
 }
 
 .nav {
+
   max-width: 1100px;
+
   margin: auto;
+
   padding: 18px 20px;
+
   display: flex;
+
   align-items: center;
-  justify-content: space-between;
+
+  justify-content:
+    space-between;
+
   gap: 15px;
+
 }
 
 .brand {
+
   font-size: 22px;
+
   font-weight: 800;
+
 }
 
 .device {
+
   font-size: 13px;
+
   color: #64748b;
+
 }
 
 .wrap {
+
   max-width: 1100px;
+
   margin: 28px auto;
+
   padding: 0 20px;
+
 }
 
 .status {
+
   display: flex;
+
   align-items: center;
+
   gap: 8px;
+
   font-weight: 700;
+
 }
 
 .dot {
+
   width: 10px;
+
   height: 10px;
+
   border-radius: 50%;
+
   background: #94a3b8;
+
 }
 
 .dot.on {
+
   background: #22c55e;
+
 }
 
 .tabs {
+
   display: flex;
+
   gap: 8px;
+
   margin: 20px 0;
+
   flex-wrap: wrap;
+
 }
 
 .tab {
+
   border: 0;
+
   background: #e8edf5;
+
   padding: 11px 18px;
+
   border-radius: 10px;
+
   cursor: pointer;
+
   font-weight: 700;
+
 }
 
 .tab.active {
+
   background: #172033;
+
   color: white;
+
 }
 
 .panel {
+
   display: none;
+
 }
 
 .panel.active {
+
   display: block;
+
 }
 
 .card {
+
   background: #fff;
-  border: 1px solid #e5eaf2;
+
+  border:
+    1px solid #e5eaf2;
+
   border-radius: 18px;
+
   padding: 22px;
+
   margin-bottom: 18px;
+
   box-shadow:
-    0 8px 25px rgba(15,23,42,.05);
+    0 8px 25px
+    rgba(15,23,42,.05);
+
 }
 
 h2,
 h3 {
+
   margin-top: 0;
+
 }
 
 .grid2 {
+
   display: grid;
-  grid-template-columns: 1fr 1fr;
+
+  grid-template-columns:
+    1fr 1fr;
+
   gap: 14px;
+
 }
 
 label {
+
   display: block;
+
   font-size: 14px;
+
   font-weight: 700;
+
   color: #475569;
+
   margin: 14px 0;
+
 }
 
-input[type=number] {
+input[type=number],
+input[type=time] {
+
   width: 100%;
+
   padding: 12px;
-  border: 1px solid #d7dee9;
+
+  border:
+    1px solid #d7dee9;
+
   border-radius: 10px;
+
   font-size: 16px;
+
   margin-top: 7px;
+
 }
 
 input[type=range] {
+
   width: 100%;
+
   margin-top: 10px;
+
 }
 
 .primary,
 .danger {
+
   border: 0;
+
   padding: 12px 18px;
+
   border-radius: 10px;
+
   color: white;
+
   font-weight: 800;
+
   cursor: pointer;
+
 }
 
 .primary {
+
   background: #2563eb;
+
 }
 
 .danger {
+
   background: #dc2626;
+
 }
 
 .actions {
+
   display: flex;
+
   gap: 10px;
+
   flex-wrap: wrap;
+
 }
 
 .big-status {
+
   font-size: 25px;
+
   font-weight: 800;
-  margin: 8px 0 18px;
+
+  margin:
+    8px 0 18px;
+
 }
 
 .eyebrow {
+
   font-size: 12px;
+
   color: #64748b;
+
   text-transform: uppercase;
+
   letter-spacing: .08em;
+
 }
 
 .schedule-head {
+
   display: flex;
-  justify-content: space-between;
+
+  justify-content:
+    space-between;
+
   align-items: center;
+
 }
 
 .switch {
+
   position: relative;
+
   display: inline-block;
+
   width: 48px;
+
   height: 28px;
+
   margin: 0;
+
 }
 
 .switch input {
+
   display: none;
+
 }
 
 .slider {
+
   position: absolute;
+
   inset: 0;
+
   background: #cbd5e1;
+
   border-radius: 30px;
+
   cursor: pointer;
+
 }
 
 .slider:before {
+
   content: "";
+
   position: absolute;
+
   width: 22px;
+
   height: 22px;
+
   left: 3px;
+
   top: 3px;
+
   background: #fff;
+
   border-radius: 50%;
+
   transition: .2s;
+
 }
 
-.switch input:checked + .slider {
+.switch input:checked
++ .slider {
+
   background: #2563eb;
+
 }
 
-.switch input:checked + .slider:before {
-  transform: translateX(20px);
+.switch input:checked
++ .slider:before {
+
+  transform:
+    translateX(20px);
+
 }
 
 .msg {
+
   font-size: 13px;
+
   margin-top: 10px;
+
   color: #64748b;
+
 }
 
 .info {
+
   display: grid;
+
   grid-template-columns:
     repeat(3, 1fr);
+
   gap: 12px;
+
 }
 
 .stat {
+
   background: #f8fafc;
+
   border-radius: 12px;
+
   padding: 15px;
+
 }
 
 .stat b {
+
   display: block;
+
   font-size: 20px;
+
   margin-top: 5px;
+
 }
 
 .footer {
+
   color: #94a3b8;
+
   text-align: center;
+
   font-size: 12px;
+
   margin: 25px 0;
+
 }
 
 @media(max-width:650px) {
 
   .grid2,
   .info {
-    grid-template-columns: 1fr;
+
+    grid-template-columns:
+      1fr;
+
   }
 
   .nav {
-    align-items: flex-start;
-    flex-direction: column;
+
+    align-items:
+      flex-start;
+
+    flex-direction:
+      column;
+
   }
 
 }
@@ -621,11 +921,20 @@ input[type=range] {
     <div class="status">
 
       <span
-        class="dot ${online ? 'on' : ''}"
+        class="
+          dot
+          ${online ? 'on' : ''}
+        "
       ></span>
 
       <span id="connectionText">
-        ${online ? 'Terhubung' : 'Offline'}
+
+        ${
+          online
+            ? 'Terhubung'
+            : 'Offline'
+        }
+
       </span>
 
     </div>
@@ -640,21 +949,36 @@ input[type=range] {
 
     <button
       class="tab active"
-      onclick="showTab('kontrol',this)"
+      onclick="
+        showTab(
+          'kontrol',
+          this
+        )
+      "
     >
       Kontrol
     </button>
 
     <button
       class="tab"
-      onclick="showTab('jadwal',this)"
+      onclick="
+        showTab(
+          'jadwal',
+          this
+        )
+      "
     >
       Jadwal
     </button>
 
     <button
       class="tab"
-      onclick="showTab('histori',this)"
+      onclick="
+        showTab(
+          'histori',
+          this
+        )
+      "
     >
       Histori
     </button>
@@ -676,37 +1000,46 @@ input[type=range] {
         id="motorStatus"
         class="big-status"
       >
+
         ${
           feederStatus.motor
             ? 'Motor sedang berjalan'
             : 'Motor berhenti'
         }
+
       </div>
 
       <div class="info">
 
         <div class="stat">
+
           Status
 
           <b id="statusValue">
             ${statusText}
           </b>
+
         </div>
 
         <div class="stat">
+
           Kecepatan
 
           <b id="speedStatus">
             ${feederStatus.speed ?? 50}%
           </b>
+
         </div>
 
         <div class="stat">
+
           Durasi
 
           <b id="durationStatus">
-            ${feederStatus.duration ?? 10} detik
+            ${feederStatus.duration ?? 10}
+            detik
           </b>
+
         </div>
 
       </div>
@@ -733,7 +1066,11 @@ input[type=range] {
           min="10"
           max="100"
           value="50"
-          oninput="updateSpeed(this.value)"
+          oninput="
+            updateSpeed(
+              this.value
+            )
+          "
         >
 
       </label>
@@ -741,6 +1078,7 @@ input[type=range] {
       <div class="grid2">
 
         <label>
+
           Menit
 
           <input
@@ -749,12 +1087,15 @@ input[type=range] {
             min="0"
             max="60"
             value="0"
-            oninput="updateDuration()"
+            oninput="
+              updateDuration()
+            "
           >
 
         </label>
 
         <label>
+
           Detik
 
           <input
@@ -763,7 +1104,9 @@ input[type=range] {
             min="0"
             max="59"
             value="10"
-            oninput="updateDuration()"
+            oninput="
+              updateDuration()
+            "
           >
 
         </label>
@@ -784,14 +1127,18 @@ input[type=range] {
 
         <button
           class="primary"
-          onclick="feedNow()"
+          onclick="
+            feedNow()
+          "
         >
           Beri Pakan Sekarang
         </button>
 
         <button
           class="danger"
-          onclick="stopNow()"
+          onclick="
+            stopNow()
+          "
         >
           STOP
         </button>
@@ -819,9 +1166,12 @@ input[type=range] {
       </h2>
 
       <p class="msg">
-        Pengaturan di bawah dikirim ke ESP32
-        melalui RabbitMQ MQTT. ESP32 tetap
-        menjadi perangkat yang menjalankan jadwal.
+
+        Pengaturan di bawah dikirim
+        ke ESP32 melalui RabbitMQ MQTT.
+        ESP32 tetap menjadi perangkat
+        yang menjalankan jadwal.
+
       </p>
 
     </div>
@@ -842,15 +1192,21 @@ input[type=range] {
       </h2>
 
       <p class="msg">
-        Histori pada tahap ini mengikuti data
-        yang tersedia dari perangkat/backend.
+
+        Histori pada tahap ini mengikuti
+        data yang tersedia dari
+        perangkat/backend.
+
       </p>
 
       <div
         id="historyBox"
         class="msg"
       >
-        Belum ada histori yang dikirim oleh ESP32.
+
+        Belum ada histori yang dikirim
+        oleh ESP32.
+
       </div>
 
     </div>
@@ -858,35 +1214,50 @@ input[type=range] {
   </section>
 
   <div class="footer">
+
     Feeder Ikan IoT • ${FEEDER_ID}
+
   </div>
 
 </div>
 
 <script>
 
-function showTab(id, btn) {
+function showTab(
+  id,
+  btn
+) {
 
   document
     .querySelectorAll('.panel')
-    .forEach(x =>
-      x.classList.remove('active')
+    .forEach(
+      x =>
+        x.classList
+          .remove('active')
     );
 
   document
     .querySelectorAll('.tab')
-    .forEach(x =>
-      x.classList.remove('active')
+    .forEach(
+      x =>
+        x.classList
+          .remove('active')
     );
 
   document
     .getElementById(id)
-    .classList.add('active');
+    .classList
+    .add('active');
 
-  btn.classList.add('active');
+  btn.classList
+    .add('active');
 
-  if (id === 'jadwal') {
+  if (
+    id === 'jadwal'
+  ) {
+
     getSchedules();
+
   }
 
 }
@@ -894,8 +1265,11 @@ function showTab(id, btn) {
 function updateSpeed(v) {
 
   document
-    .getElementById('speedValue')
-    .textContent = v + '%';
+    .getElementById(
+      'speedValue'
+    )
+    .textContent =
+      v + '%';
 
 }
 
@@ -907,9 +1281,11 @@ function updateDuration() {
       Math.min(
         60,
         parseInt(
-          document.getElementById(
-            'durationMin'
-          ).value
+          document
+            .getElementById(
+              'durationMin'
+            )
+            .value
         ) || 0
       )
     );
@@ -920,38 +1296,58 @@ function updateDuration() {
       Math.min(
         59,
         parseInt(
-          document.getElementById(
-            'durationSec'
-          ).value
+          document
+            .getElementById(
+              'durationSec'
+            )
+            .value
         ) || 0
       )
     );
 
-  if (m === 60) {
+  if (
+    m === 60
+  ) {
+
     s = 0;
+
   }
 
-  document.getElementById(
-    'durationMin'
-  ).value = m;
+  document
+    .getElementById(
+      'durationMin'
+    )
+    .value = m;
 
-  document.getElementById(
-    'durationSec'
-  ).value = s;
+  document
+    .getElementById(
+      'durationSec'
+    )
+    .value = s;
 
-  document.getElementById(
-    'durationValue'
-  ).textContent =
-    m + ' menit ' + s + ' detik';
+  document
+    .getElementById(
+      'durationValue'
+    )
+    .textContent =
+      m +
+      ' menit ' +
+      s +
+      ' detik';
 
 }
 
-function updateScheduleSpeed(i, v) {
+function updateScheduleSpeed(
+  i,
+  v
+) {
 
-  document.getElementById(
-    'jspeedValue' + i
-  ).textContent =
-    v + '%';
+  document
+    .getElementById(
+      'jspeedValue' + i
+    )
+    .textContent =
+      v + '%';
 
 }
 
@@ -959,16 +1355,20 @@ async function feedNow() {
 
   const m =
     parseInt(
-      document.getElementById(
-        'durationMin'
-      ).value
+      document
+        .getElementById(
+          'durationMin'
+        )
+        .value
     ) || 0;
 
   const s =
     parseInt(
-      document.getElementById(
-        'durationSec'
-      ).value
+      document
+        .getElementById(
+          'durationSec'
+        )
+        .value
     ) || 0;
 
   const duration =
@@ -976,20 +1376,24 @@ async function feedNow() {
 
   const speed =
     parseInt(
-      document.getElementById(
-        'speed'
-      ).value
+      document
+        .getElementById(
+          'speed'
+        )
+        .value
     );
 
   if (
     duration < 1 ||
     duration > 3600
   ) {
+
     alert(
       'Durasi harus 1 detik sampai 60 menit.'
     );
 
     return;
+
   }
 
   const r =
@@ -997,25 +1401,32 @@ async function feedNow() {
       '/api/feed',
       {
         method: 'POST',
+
         headers: {
           'Content-Type':
             'application/json'
         },
-        body: JSON.stringify({
-          speed,
-          duration
-        })
+
+        body:
+          JSON.stringify({
+            speed,
+            duration
+          })
+
       }
     );
 
-  const d = await r.json();
+  const d =
+    await r.json();
 
-  document.getElementById(
-    'controlMsg'
-  ).textContent =
-    d.message ||
-    d.error ||
-    'Selesai';
+  document
+    .getElementById(
+      'controlMsg'
+    )
+    .textContent =
+      d.message ||
+      d.error ||
+      'Selesai';
 
   refreshStatus();
 
@@ -1034,12 +1445,14 @@ async function stopNow() {
   const d =
     await r.json();
 
-  document.getElementById(
-    'controlMsg'
-  ).textContent =
-    d.message ||
-    d.error ||
-    'Selesai';
+  document
+    .getElementById(
+      'controlMsg'
+    )
+    .textContent =
+      d.message ||
+      d.error ||
+      'Selesai';
 
   refreshStatus();
 
@@ -1052,46 +1465,46 @@ async function simpanJadwal(i) {
     index: i,
 
     aktif:
-      document.getElementById(
-        'aktif' + i
-      ).checked
+      document
+        .getElementById(
+          'aktif' + i
+        )
+        .checked
         ? 1
         : 0,
 
-    jam:
-      parseInt(
-        document.getElementById(
-          'jam' + i
-        ).value
-      ) || 0,
-
-    menit:
-      parseInt(
-        document.getElementById(
-          'menit' + i
-        ).value
-      ) || 0,
+    time:
+      document
+        .getElementById(
+          'time' + i
+        )
+        .value,
 
     speed:
       parseInt(
-        document.getElementById(
-          'speed' + i
-        ).value
+        document
+          .getElementById(
+            'speed' + i
+          )
+          .value
       ) || 50,
 
     duration:
       parseInt(
-        document.getElementById(
-          'duration' + i
-        ).value
+        document
+          .getElementById(
+            'duration' + i
+          )
+          .value
       ) || 1
 
   };
 
   const box =
-    document.getElementById(
-      'scheduleMsg' + i
-    );
+    document
+      .getElementById(
+        'scheduleMsg' + i
+      );
 
   box.textContent =
     'Menyimpan...';
@@ -1103,12 +1516,17 @@ async function simpanJadwal(i) {
         '/api/schedule',
         {
           method: 'POST',
+
           headers: {
             'Content-Type':
               'application/json'
           },
+
           body:
-            JSON.stringify(payload)
+            JSON.stringify(
+              payload
+            )
+
         }
       );
 
@@ -1121,7 +1539,9 @@ async function simpanJadwal(i) {
       'Selesai';
 
     if (r.ok) {
+
       getSchedules();
+
     }
 
   } catch (e) {
@@ -1158,40 +1578,60 @@ async function getSchedules() {
             s.index;
 
           if (
-            document.getElementById(
-              'aktif' + i
-            )
+            document
+              .getElementById(
+                'aktif' + i
+              )
           ) {
 
-            document.getElementById(
-              'aktif' + i
-            ).checked =
-              !!s.aktif;
+            document
+              .getElementById(
+                'aktif' + i
+              )
+              .checked =
+                !!s.aktif;
 
-            document.getElementById(
-              'jam' + i
-            ).value =
-              s.jam;
+            document
+              .getElementById(
+                'time' + i
+              )
+              .value =
+                String(
+                  s.jam
+                )
+                  .padStart(
+                    2,
+                    '0'
+                  ) +
+                ':' +
+                String(
+                  s.menit
+                )
+                  .padStart(
+                    2,
+                    '0'
+                  );
 
-            document.getElementById(
-              'menit' + i
-            ).value =
-              s.menit;
+            document
+              .getElementById(
+                'speed' + i
+              )
+              .value =
+                s.speed;
 
-            document.getElementById(
-              'speed' + i
-            ).value =
-              s.speed;
+            document
+              .getElementById(
+                'jspeedValue' + i
+              )
+              .textContent =
+                s.speed + '%';
 
-            document.getElementById(
-              'jspeedValue' + i
-            ).textContent =
-              s.speed + '%';
-
-            document.getElementById(
-              'duration' + i
-            ).value =
-              s.duration;
+            document
+              .getElementById(
+                'duration' + i
+              )
+              .value =
+                s.duration;
 
           }
 
@@ -1220,47 +1660,62 @@ async function refreshStatus() {
     const d =
       await r.json();
 
-    document.getElementById(
-      'statusValue'
-    ).textContent =
-      d.status || 'offline';
+    document
+      .getElementById(
+        'statusValue'
+      )
+      .textContent =
+        d.status ||
+        'offline';
 
-    document.getElementById(
-      'speedStatus'
-    ).textContent =
-      (d.speed ?? 50) + '%';
+    document
+      .getElementById(
+        'speedStatus'
+      )
+      .textContent =
+        (d.speed ?? 50) +
+        '%';
 
-    document.getElementById(
-      'durationStatus'
-    ).textContent =
-      (d.duration ?? 10) +
-      ' detik';
+    document
+      .getElementById(
+        'durationStatus'
+      )
+      .textContent =
+        (d.duration ?? 10) +
+        ' detik';
 
-    document.getElementById(
-      'motorStatus'
-    ).textContent =
-      d.motor
-        ? 'Motor sedang berjalan'
-        : 'Motor berhenti';
+    document
+      .getElementById(
+        'motorStatus'
+      )
+      .textContent =
+        d.motor
+          ? 'Motor sedang berjalan'
+          : 'Motor berhenti';
 
     const online =
       d.status &&
-      d.status !== 'offline';
+      d.status !==
+        'offline';
 
     document
-      .querySelector('.dot')
+      .querySelector(
+        '.dot'
+      )
       .classList
       .toggle(
         'on',
         online
       );
 
-    document.getElementById(
-      'connectionText'
-    ).textContent =
-      online
-        ? 'Terhubung'
-        : 'Offline';
+    document
+      .getElementById(
+        'connectionText'
+      )
+      .textContent =
+        online
+          ? 'Terhubung'
+          : 'Offline';
 
   } catch (e) {}
 
@@ -1281,194 +1736,296 @@ refreshStatus();
 
 }
 
-app.get('/', (req, res) => {
-  res.send(page());
-});
+app.get(
+  '/',
+  (req, res) =>
+    res.send(page())
+);
 
-app.get('/api/status', (req, res) => {
+app.get(
+  '/api/status',
+  (req, res) => {
 
-  res.json({
-    ...feederStatus,
-    mqttConnected:
-      mqttClient.connected
-  });
+    res.json({
+      ...feederStatus,
 
-});
-
-app.get('/api/schedules', (req, res) => {
-
-  res.json({
-    device: FEEDER_ID,
-    schedules
-  });
-
-});
-
-app.post('/api/feed', (req, res) => {
-
-  const speed =
-    clamp(
-      Number(req.body.speed),
-      10,
-      100
-    );
-
-  const duration =
-    clamp(
-      Number(req.body.duration),
-      1,
-      3600
-    );
-
-  const ok =
-    publishCommand({
-      action: 'feed',
-      device: FEEDER_ID,
-      speed,
-      duration
+      mqttConnected:
+        mqttClient.connected
     });
 
-  if (!ok) {
-
-    return res
-      .status(503)
-      .json({
-        error:
-          'MQTT belum terhubung ke RabbitMQ.'
-      });
-
   }
+);
 
-  res.json({
-    success: true,
-    message:
-      'Perintah pemberian pakan dikirim ke ESP32.'
-  });
+app.get(
+  '/api/schedules',
+  (req, res) => {
 
-});
-
-app.post('/api/stop', (req, res) => {
-
-  const ok =
-    publishCommand({
-      action: 'stop',
-      device: FEEDER_ID
-    });
-
-  if (!ok) {
-
-    return res
-      .status(503)
-      .json({
-        error:
-          'MQTT belum terhubung ke RabbitMQ.'
-      });
-
-  }
-
-  res.json({
-    success: true,
-    message:
-      'Perintah STOP dikirim ke ESP32.'
-  });
-
-});
-
-app.post('/api/schedule', (req, res) => {
-
-  const index =
-    Number(req.body.index);
-
-  if (!validIndex(index)) {
-
-    return res
-      .status(400)
-      .json({
-        error:
-          'Index jadwal harus 0, 1, atau 2.'
-      });
-
-  }
-
-  const schedule =
-    normalizeSchedule({
-
-      index,
-
-      aktif:
-        req.body.aktif,
-
-      jam:
-        req.body.jam,
-
-      menit:
-        req.body.menit,
-
-      speed:
-        req.body.speed,
-
-      duration:
-        req.body.duration
-
-    });
-
-  const ok =
-    publishCommand({
-
-      action:
-        'schedule_save',
+    res.json({
 
       device:
         FEEDER_ID,
 
-      index:
-        schedule.index,
-
-      aktif:
-        schedule.aktif
-          ? 1
-          : 0,
-
-      jam:
-        schedule.jam,
-
-      menit:
-        schedule.menit,
-
-      speed:
-        schedule.speed,
-
-      duration:
-        schedule.duration
+      schedules
 
     });
 
-  if (!ok) {
+  }
+);
 
-    return res
-      .status(503)
-      .json({
-        error:
-          'MQTT belum terhubung ke RabbitMQ.'
+app.post(
+  '/api/feed',
+  (req, res) => {
+
+    const speed =
+      clamp(
+        Number(
+          req.body.speed
+        ),
+        10,
+        100
+      );
+
+    const duration =
+      clamp(
+        Number(
+          req.body.duration
+        ),
+        1,
+        3600
+      );
+
+    const ok =
+      publishCommand({
+
+        action:
+          'feed',
+
+        device:
+          FEEDER_ID,
+
+        speed,
+
+        duration
+
       });
 
+    if (!ok) {
+
+      return res
+        .status(503)
+        .json({
+          error:
+            'MQTT belum terhubung ke RabbitMQ.'
+        });
+
+    }
+
+    res.json({
+
+      success: true,
+
+      message:
+        'Perintah pemberian pakan dikirim ke ESP32.'
+
+    });
+
   }
+);
 
-  schedules[index] =
-    schedule;
+app.post(
+  '/api/stop',
+  (req, res) => {
 
-  res.json({
+    const ok =
+      publishCommand({
 
-    success: true,
+        action:
+          'stop',
 
-    message:
-      `Jadwal ${index + 1} dikirim ke ESP32.`,
+        device:
+          FEEDER_ID
 
-    schedule
+      });
 
-  });
+    if (!ok) {
 
-});
+      return res
+        .status(503)
+        .json({
+          error:
+            'MQTT belum terhubung ke RabbitMQ.'
+        });
+
+    }
+
+    res.json({
+
+      success: true,
+
+      message:
+        'Perintah STOP dikirim ke ESP32.'
+
+    });
+
+  }
+);
+
+app.post(
+  '/api/schedule',
+  (req, res) => {
+
+    const index =
+      Number(
+        req.body.index
+      );
+
+    if (
+      !validIndex(index)
+    ) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            'Index jadwal harus 0, 1, atau 2.'
+        });
+
+    }
+
+    /*
+      Format waktu dari halaman:
+      HH:MM
+
+      Contoh:
+      07:30
+      12:00
+      18:45
+    */
+
+    const time =
+      String(
+        req.body.time || ''
+      ).trim();
+
+    const match =
+      /^(\d{2}):(\d{2})$/
+        .exec(time);
+
+    if (!match) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            'Format waktu harus HH:MM.'
+        });
+
+    }
+
+    const jam =
+      Number(
+        match[1]
+      );
+
+    const menit =
+      Number(
+        match[2]
+      );
+
+    if (
+      jam < 0 ||
+      jam > 23 ||
+      menit < 0 ||
+      menit > 59
+    ) {
+
+      return res
+        .status(400)
+        .json({
+          error:
+            'Waktu tidak valid.'
+        });
+
+    }
+
+    const schedule =
+      normalizeSchedule({
+
+        index,
+
+        aktif:
+          req.body.aktif,
+
+        jam,
+
+        menit,
+
+        speed:
+          req.body.speed,
+
+        duration:
+          req.body.duration
+
+      });
+
+    const ok =
+      publishCommand({
+
+        action:
+          'schedule_save',
+
+        device:
+          FEEDER_ID,
+
+        index:
+          schedule.index,
+
+        aktif:
+          schedule.aktif
+            ? 1
+            : 0,
+
+        jam:
+          schedule.jam,
+
+        menit:
+          schedule.menit,
+
+        speed:
+          schedule.speed,
+
+        duration:
+          schedule.duration
+
+      });
+
+    if (!ok) {
+
+      return res
+        .status(503)
+        .json({
+          error:
+            'MQTT belum terhubung ke RabbitMQ.'
+        });
+
+    }
+
+    schedules[index] =
+      schedule;
+
+    res.json({
+
+      success: true,
+
+      message:
+        `Jadwal ${index + 1} dikirim ke ESP32.`,
+
+      schedule
+
+    });
+
+  }
+);
 
 app.post(
   '/api/schedules/get',
