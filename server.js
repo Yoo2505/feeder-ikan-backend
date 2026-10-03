@@ -1,2093 +1,362 @@
-const express = require('express');
-const mqtt = require('mqtt');
+const express = require("express");
+const mqtt = require("mqtt");
 
 const app = express();
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
-
-const FEEDER_ID = 'FEEDER-001';
-const MQTT_HOST = process.env.MQTT_HOST || 'mqtt://195.35.23.135';
+const MQTT_HOST = process.env.MQTT_HOST || "mqtt://195.35.23.135";
 const MQTT_PORT = Number(process.env.MQTT_PORT || 1883);
-const MQTT_USER = process.env.MQTT_USER || '/ai-automation:mhs_kuliah';
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD || '';
+const MQTT_USER = process.env.MQTT_USER || "/ai-automation:mhs_kuliah";
+const MQTT_PASSWORD = process.env.MQTT_PASSWORD || "";
 
+const FEEDER_ID = "FEEDER-001";
 const COMMAND_TOPIC = `feeder/${FEEDER_ID}/command`;
 const STATUS_TOPIC = `feeder/${FEEDER_ID}/status`;
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-let feederStatus = {
+let latestStatus = {
   device: FEEDER_ID,
-  status: 'offline',
+  status: "offline",
   motor: false,
-  speed: 50,
-  duration: 10,
-  reason: 'server_start',
-  lastUpdate: null
+  speed: 0,
+  duration: 0,
+  reason: "backend_start"
 };
 
 let schedules = [
-  {
-    index: 0,
-    aktif: false,
-    jam: 7,
-    menit: 0,
-    speed: 50,
-    duration: 10
-  },
-  {
-    index: 1,
-    aktif: false,
-    jam: 12,
-    menit: 0,
-    speed: 50,
-    duration: 10
-  },
-  {
-    index: 2,
-    aktif: false,
-    jam: 18,
-    menit: 0,
-    speed: 50,
-    duration: 10
-  }
+  { index: 0, aktif: false, time: "07:00", speed: 50, duration: 10 },
+  { index: 1, aktif: false, time: "12:00", speed: 50, duration: 10 },
+  { index: 2, aktif: false, time: "17:00", speed: 50, duration: 10 }
 ];
+
+let history = [];
 
 const mqttClient = mqtt.connect(MQTT_HOST, {
   port: MQTT_PORT,
   username: MQTT_USER,
   password: MQTT_PASSWORD,
-
-  clientId:
-    `railway-${FEEDER_ID.toLowerCase()}-${Math.random()
-      .toString(16)
-      .slice(2, 10)}`,
-
-  reconnectPeriod: 5000,
-  connectTimeout: 10000,
-  clean: true
+  reconnectPeriod: 5000
 });
 
-mqttClient.on('connect', () => {
+mqttClient.on("connect", () => {
+  console.log("MQTT TERHUBUNG");
 
-  console.log(
-    'MQTT TERHUBUNG ke RabbitMQ'
-  );
-
-  mqttClient.subscribe(
-    STATUS_TOPIC,
-    { qos: 1 },
-    (err) => {
-
-      if (err) {
-
-        console.error(
-          'Gagal subscribe status:',
-          err.message
-        );
-
-      } else {
-
-        console.log(
-          'Subscribe:',
-          STATUS_TOPIC
-        );
-
-      }
-
-    }
-  );
-
-  publishCommand({
-    action: 'status',
-    device: FEEDER_ID
+  mqttClient.subscribe(STATUS_TOPIC, { qos: 1 }, (err) => {
+    if (err) console.error("Subscribe status gagal:", err.message);
+    else console.log("Subscribe:", STATUS_TOPIC);
   });
-
-  publishCommand({
-    action: 'schedule_get',
-    device: FEEDER_ID
-  });
-
-});
-
-mqttClient.on('reconnect', () => {
-
-  console.log(
-    'Mencoba reconnect MQTT...'
-  );
-
-});
-
-mqttClient.on('close', () => {
-
-  console.log(
-    'MQTT terputus'
-  );
-
-});
-
-mqttClient.on('error', (err) => {
-
-  console.error(
-    'MQTT error:',
-    err.message
-  );
-
-});
-
-mqttClient.on(
-  'message',
-  (topic, message) => {
-
-    if (topic !== STATUS_TOPIC) {
-      return;
-    }
-
-    const raw =
-      message.toString();
-
-    console.log(
-      'STATUS ESP32:',
-      raw
-    );
-
-    try {
-
-      const data =
-        JSON.parse(raw);
-
-      feederStatus = {
-        ...feederStatus,
-        ...data,
-        lastUpdate:
-          new Date().toISOString()
-      };
-
-      if (
-        data.status ===
-          'schedule_state' &&
-        Array.isArray(
-          data.schedules
-        )
-      ) {
-
-        schedules =
-          data.schedules.map(
-            normalizeSchedule
-          );
-
-      }
-
-    } catch (err) {
-
-      console.error(
-        'Payload status bukan JSON valid:',
-        err.message
-      );
-
-    }
-
-  }
-);
-
-function publishCommand(payload) {
-
-  if (!mqttClient.connected) {
-
-    console.log(
-      'MQTT belum terhubung. Command tidak dikirim:',
-      payload
-    );
-
-    return false;
-  }
-
-  const message =
-    JSON.stringify(payload);
 
   mqttClient.publish(
     COMMAND_TOPIC,
-    message,
-    { qos: 1 },
-    (err) => {
+    JSON.stringify({ action: "status", device: FEEDER_ID }),
+    { qos: 1 }
+  );
 
-      if (err) {
+  mqttClient.publish(
+    COMMAND_TOPIC,
+    JSON.stringify({ action: "schedule_get", device: FEEDER_ID }),
+    { qos: 1 }
+  );
+});
 
-        console.error(
-          'Gagal publish MQTT:',
-          err.message
-        );
+mqttClient.on("reconnect", () => console.log("MQTT mencoba reconnect..."));
+mqttClient.on("error", (err) => console.error("MQTT error:", err.message));
 
-      } else {
+mqttClient.on("message", (topic, message) => {
+  if (topic !== STATUS_TOPIC) return;
 
-        console.log(
-          'COMMAND MQTT:',
-          message
-        );
+  try {
+    const data = JSON.parse(message.toString());
+    console.log("STATUS ESP32:", data);
 
-      }
-
+    if (data.status === "schedule_state" && Array.isArray(data.schedules)) {
+      schedules = data.schedules.map((s, i) => ({
+        index: Number(s.index ?? i),
+        aktif: Boolean(Number(s.aktif)),
+        time: `${String(Number(s.jam) || 0).padStart(2, "0")}:${String(Number(s.menit) || 0).padStart(2, "0")}`,
+        speed: Number(s.speed) || 50,
+        duration: Number(s.duration) || 10
+      }));
+    } else {
+      latestStatus = {
+        ...latestStatus,
+        ...data,
+        lastUpdate: new Date().toISOString()
+      };
     }
-  );
 
-  return true;
-}
-
-function normalizeSchedule(item) {
-
-  return {
-
-    index:
-      Number(item.index),
-
-    aktif:
-      Boolean(
-        Number(item.aktif)
-      ),
-
-    jam:
-      clamp(
-        Number(item.jam),
-        0,
-        23
-      ),
-
-    menit:
-      clamp(
-        Number(item.menit),
-        0,
-        59
-      ),
-
-    speed:
-      clamp(
-        Number(item.speed),
-        10,
-        100
-      ),
-
-    duration:
-      clamp(
-        Number(item.duration),
-        1,
-        3600
-      )
-
-  };
-
-}
-
-function clamp(
-  value,
-  min,
-  max
-) {
-
-  if (
-    !Number.isFinite(value)
-  ) {
-
-    return min;
-
+    if (data.status === "feeding" || data.status === "running") {
+      history.unshift({
+        time: new Date().toISOString(),
+        speed: Number(data.speed) || 0,
+        duration: Number(data.duration) || 0,
+        status: "Selesai/berjalan"
+      });
+      history = history.slice(0, 50);
+    }
+  } catch (err) {
+    console.error("Payload MQTT bukan JSON valid:", err.message);
   }
+});
 
-  return Math.min(
-    max,
-    Math.max(min, value)
-  );
+function publishCommand(payload) {
+  return new Promise((resolve, reject) => {
+    if (!mqttClient.connected) {
+      return reject(new Error("MQTT belum terhubung"));
+    }
 
+    mqttClient.publish(
+      COMMAND_TOPIC,
+      JSON.stringify({ ...payload, device: FEEDER_ID }),
+      { qos: 1 },
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
 }
 
-function validIndex(index) {
+app.get("/api/status", (req, res) => res.json(latestStatus));
 
-  return (
-    Number.isInteger(index) &&
-    index >= 0 &&
-    index < 3
-  );
+app.post("/api/feed", async (req, res) => {
+  try {
+    const speed = Math.max(10, Math.min(100, Number(req.body.speed) || 50));
+    const duration = Math.max(1, Math.min(3600, Number(req.body.duration) || 10));
 
-}
+    await publishCommand({ action: "feed", speed, duration });
 
-function page() {
+    res.json({ success: true, message: "Perintah pemberian pakan dikirim", speed, duration });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
-  const scheduleCards =
-    schedules
-      .map(
-        (s) => `
+app.post("/api/stop", async (req, res) => {
+  try {
+    await publishCommand({ action: "stop" });
+    res.json({ success: true, message: "Perintah stop dikirim" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
-    <div class="card schedule-card">
+app.get("/api/schedules", (req, res) => res.json(schedules));
 
-      <div class="schedule-head">
+app.post("/api/schedule", async (req, res) => {
+  try {
+    const index = Number(req.body.index);
 
-        <div>
+    if (![0, 1, 2].includes(index)) {
+      return res.status(400).json({ success: false, message: "Index jadwal tidak valid" });
+    }
 
-          <div class="eyebrow">
-            Jadwal ${s.index + 1}
-          </div>
+    const aktif =
+      req.body.aktif === true ||
+      req.body.aktif === 1 ||
+      req.body.aktif === "1";
 
-          <h3>
-            Waktu Pemberian Pakan
-          </h3>
+    const time = String(req.body.time || "");
+    const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(time);
 
-        </div>
+    if (!match) {
+      return res.status(400).json({ success: false, message: "Format waktu harus HH:MM" });
+    }
 
-        <label class="switch">
+    const jam = Number(match[1]);
+    const menit = Number(match[2]);
+    const speed = Math.max(10, Math.min(100, Number(req.body.speed) || 50));
+    const duration = Math.max(1, Math.min(3600, Number(req.body.duration) || 10));
 
-          <input
-            id="aktif${s.index}"
-            type="checkbox"
-            ${s.aktif ? 'checked' : ''}
-          >
+    await publishCommand({
+      action: "schedule_save",
+      index,
+      aktif: aktif ? 1 : 0,
+      jam,
+      menit,
+      speed,
+      duration
+    });
 
-          <span class="slider"></span>
+    schedules[index] = { index, aktif, time, speed, duration };
 
-        </label>
+    res.json({
+      success: true,
+      message: `Jadwal ${index + 1} berhasil disimpan`,
+      schedule: schedules[index]
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
-      </div>
+app.get("/api/schedules/get", async (req, res) => {
+  try {
+    await publishCommand({ action: "schedule_get" });
+    res.json({ success: true, message: "Permintaan jadwal dikirim", schedules });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
-      <label>
+app.get("/api/history", (req, res) => res.json(history));
 
-        Waktu Pemberian Pakan
-
-        <input
-          id="time${s.index}"
-          type="time"
-          value="${String(s.jam).padStart(2, '0')}:${String(s.menit).padStart(2, '0')}"
-        >
-
-      </label>
-
-      <label>
-
-        Kecepatan Motor
-
-        <strong id="jspeedValue${s.index}">
-          ${s.speed}%
-        </strong>
-
-        <input
-          id="speed${s.index}"
-          type="range"
-          min="10"
-          max="100"
-          value="${s.speed}"
-          oninput="
-            updateScheduleSpeed(
-              ${s.index},
-              this.value
-            )
-          "
-        >
-
-      </label>
-
-      <label>
-
-        Durasi Motor (detik)
-
-        <input
-          id="duration${s.index}"
-          type="number"
-          min="1"
-          max="3600"
-          value="${s.duration}"
-        >
-
-      </label>
-
-      <button
-        class="primary"
-        onclick="
-          simpanJadwal(
-            ${s.index}
-          )
-        "
-      >
-        Simpan Jadwal ${s.index + 1}
-      </button>
-
-      <div
-        id="scheduleMsg${s.index}"
-        class="msg"
-      ></div>
-
-    </div>
-
-  `
-      )
-      .join('');
-
-  const statusText =
-    feederStatus.status ||
-    'offline';
-
-  const online =
-    statusText !== 'offline';
-
-  return `<!doctype html>
-
+app.get("/", (req, res) => {
+  res.send(`<!DOCTYPE html>
 <html lang="id">
-
 <head>
-
 <meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
->
-
-<title>
-  Feeder Ikan IoT
-</title>
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Feeder Ikan IoT</title>
 <style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-
-  margin: 0;
-
-  font-family:
-    Inter,
-    Arial,
-    sans-serif;
-
-  background: #f4f7fb;
-
-  color: #172033;
-
-}
-
-.top {
-
-  background: #fff;
-
-  border-bottom:
-    1px solid #e5eaf2;
-
-  position: sticky;
-
-  top: 0;
-
-  z-index: 5;
-
-}
-
-.nav {
-
-  max-width: 1100px;
-
-  margin: auto;
-
-  padding: 18px 20px;
-
-  display: flex;
-
-  align-items: center;
-
-  justify-content:
-    space-between;
-
-  gap: 15px;
-
-}
-
-.brand {
-
-  font-size: 22px;
-
-  font-weight: 800;
-
-}
-
-.device {
-
-  font-size: 13px;
-
-  color: #64748b;
-
-}
-
-.wrap {
-
-  max-width: 1100px;
-
-  margin: 28px auto;
-
-  padding: 0 20px;
-
-}
-
-.status {
-
-  display: flex;
-
-  align-items: center;
-
-  gap: 8px;
-
-  font-weight: 700;
-
-}
-
-.dot {
-
-  width: 10px;
-
-  height: 10px;
-
-  border-radius: 50%;
-
-  background: #94a3b8;
-
-}
-
-.dot.on {
-
-  background: #22c55e;
-
-}
-
-.tabs {
-
-  display: flex;
-
-  gap: 8px;
-
-  margin: 20px 0;
-
-  flex-wrap: wrap;
-
-}
-
-.tab {
-
-  border: 0;
-
-  background: #e8edf5;
-
-  padding: 11px 18px;
-
-  border-radius: 10px;
-
-  cursor: pointer;
-
-  font-weight: 700;
-
-}
-
-.tab.active {
-
-  background: #172033;
-
-  color: white;
-
-}
-
-.panel {
-
-  display: none;
-
-}
-
-.panel.active {
-
-  display: block;
-
-}
-
-.card {
-
-  background: #fff;
-
-  border:
-    1px solid #e5eaf2;
-
-  border-radius: 18px;
-
-  padding: 22px;
-
-  margin-bottom: 18px;
-
-  box-shadow:
-    0 8px 25px
-    rgba(15,23,42,.05);
-
-}
-
-h2,
-h3 {
-
-  margin-top: 0;
-
-}
-
-.grid2 {
-
-  display: grid;
-
-  grid-template-columns:
-    1fr 1fr;
-
-  gap: 14px;
-
-}
-
-label {
-
-  display: block;
-
-  font-size: 14px;
-
-  font-weight: 700;
-
-  color: #475569;
-
-  margin: 14px 0;
-
-}
-
-input[type=number],
-input[type=time] {
-
-  width: 100%;
-
-  padding: 12px;
-
-  border:
-    1px solid #d7dee9;
-
-  border-radius: 10px;
-
-  font-size: 16px;
-
-  margin-top: 7px;
-
-}
-
-input[type=range] {
-
-  width: 100%;
-
-  margin-top: 10px;
-
-}
-
-.primary,
-.danger {
-
-  border: 0;
-
-  padding: 12px 18px;
-
-  border-radius: 10px;
-
-  color: white;
-
-  font-weight: 800;
-
-  cursor: pointer;
-
-}
-
-.primary {
-
-  background: #2563eb;
-
-}
-
-.danger {
-
-  background: #dc2626;
-
-}
-
-.actions {
-
-  display: flex;
-
-  gap: 10px;
-
-  flex-wrap: wrap;
-
-}
-
-.big-status {
-
-  font-size: 25px;
-
-  font-weight: 800;
-
-  margin:
-    8px 0 18px;
-
-}
-
-.eyebrow {
-
-  font-size: 12px;
-
-  color: #64748b;
-
-  text-transform: uppercase;
-
-  letter-spacing: .08em;
-
-}
-
-.schedule-head {
-
-  display: flex;
-
-  justify-content:
-    space-between;
-
-  align-items: center;
-
-}
-
-.switch {
-
-  position: relative;
-
-  display: inline-block;
-
-  width: 48px;
-
-  height: 28px;
-
-  margin: 0;
-
-}
-
-.switch input {
-
-  display: none;
-
-}
-
-.slider {
-
-  position: absolute;
-
-  inset: 0;
-
-  background: #cbd5e1;
-
-  border-radius: 30px;
-
-  cursor: pointer;
-
-}
-
-.slider:before {
-
-  content: "";
-
-  position: absolute;
-
-  width: 22px;
-
-  height: 22px;
-
-  left: 3px;
-
-  top: 3px;
-
-  background: #fff;
-
-  border-radius: 50%;
-
-  transition: .2s;
-
-}
-
-.switch input:checked
-+ .slider {
-
-  background: #2563eb;
-
-}
-
-.switch input:checked
-+ .slider:before {
-
-  transform:
-    translateX(20px);
-
-}
-
-.msg {
-
-  font-size: 13px;
-
-  margin-top: 10px;
-
-  color: #64748b;
-
-}
-
-.info {
-
-  display: grid;
-
-  grid-template-columns:
-    repeat(3, 1fr);
-
-  gap: 12px;
-
-}
-
-.stat {
-
-  background: #f8fafc;
-
-  border-radius: 12px;
-
-  padding: 15px;
-
-}
-
-.stat b {
-
-  display: block;
-
-  font-size: 20px;
-
-  margin-top: 5px;
-
-}
-
-.footer {
-
-  color: #94a3b8;
-
-  text-align: center;
-
-  font-size: 12px;
-
-  margin: 25px 0;
-
-}
-
-@media(max-width:650px) {
-
-  .grid2,
-  .info {
-
-    grid-template-columns:
-      1fr;
-
-  }
-
-  .nav {
-
-    align-items:
-      flex-start;
-
-    flex-direction:
-      column;
-
-  }
-
-}
-
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f4f7fb;color:#172033}
+header{background:#1565c0;color:white;padding:18px 20px}
+header h1{margin:0;font-size:22px}
+.container{max-width:900px;margin:auto;padding:18px}
+.tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.tab{border:0;padding:11px 18px;border-radius:10px;background:#dfe8f5;cursor:pointer;font-weight:bold}
+.tab.active{background:#1565c0;color:white}
+.page{display:none}.page.active{display:block}
+.card{background:white;border-radius:16px;padding:18px;margin-bottom:16px;box-shadow:0 3px 14px rgba(0,0,0,.07)}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+label{font-weight:bold;display:block;margin:10px 0 6px}
+input,button{font:inherit}
+input[type=number],input[type=time]{width:100%;padding:11px;border:1px solid #ccd5e2;border-radius:9px}
+input[type=range]{width:100%}
+button.action{border:0;border-radius:10px;padding:12px 18px;cursor:pointer;font-weight:bold}
+.start{background:#2e7d32;color:white}.stop{background:#c62828;color:white}.save{background:#1565c0;color:white}
+.status{padding:10px 12px;border-radius:10px;background:#eef3f9;margin-top:12px}
+.schedule{border:1px solid #e1e7ef;border-radius:14px;padding:15px;margin-bottom:14px}
+.schedule h3{margin-top:0}.switch{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.history-item{border-bottom:1px solid #e7ebf0;padding:10px 0}
+.small{font-size:13px;color:#667085}
 </style>
-
 </head>
-
 <body>
-
-<div class="top">
-
-  <div class="nav">
-
-    <div>
-
-      <div class="brand">
-        Feeder Ikan IoT
-      </div>
-
-      <div class="device">
-        ${FEEDER_ID}
-      </div>
-
-    </div>
-
-    <div class="status">
-
-      <span
-        class="
-          dot
-          ${online ? 'on' : ''}
-        "
-      ></span>
-
-      <span id="connectionText">
-
-        ${
-          online
-            ? 'Terhubung'
-            : 'Offline'
-        }
-
-      </span>
-
-    </div>
-
-  </div>
-
+<header><h1>🐟 Feeder Ikan IoT</h1></header>
+<div class="container">
+<div class="tabs">
+<button class="tab active" onclick="showPage('kontrol',this)">Kontrol</button>
+<button class="tab" onclick="showPage('jadwal',this)">Jadwal</button>
+<button class="tab" onclick="showPage('histori',this)">Histori</button>
 </div>
 
-<div class="wrap">
-
-  <div class="tabs">
-
-    <button
-      class="tab active"
-      onclick="
-        showTab(
-          'kontrol',
-          this
-        )
-      "
-    >
-      Kontrol
-    </button>
-
-    <button
-      class="tab"
-      onclick="
-        showTab(
-          'jadwal',
-          this
-        )
-      "
-    >
-      Jadwal
-    </button>
-
-    <button
-      class="tab"
-      onclick="
-        showTab(
-          'histori',
-          this
-        )
-      "
-    >
-      Histori
-    </button>
-
-  </div>
-
-  <section
-    id="kontrol"
-    class="panel active"
-  >
-
-    <div class="card">
-
-      <div class="eyebrow">
-        Status perangkat
-      </div>
-
-      <div
-        id="motorStatus"
-        class="big-status"
-      >
-
-        ${
-          feederStatus.motor
-            ? 'Motor sedang berjalan'
-            : 'Motor berhenti'
-        }
-
-      </div>
-
-      <div class="info">
-
-        <div class="stat">
-
-          Status
-
-          <b id="statusValue">
-            ${statusText}
-          </b>
-
-        </div>
-
-        <div class="stat">
-
-          Kecepatan
-
-          <b id="speedStatus">
-            ${feederStatus.speed ?? 50}%
-          </b>
-
-        </div>
-
-        <div class="stat">
-
-          Durasi
-
-          <b id="durationStatus">
-            ${feederStatus.duration ?? 10}
-            detik
-          </b>
-
-        </div>
-
-      </div>
-
-    </div>
-
-    <div class="card">
-
-      <h2>
-        Kontrol Manual
-      </h2>
-
-      <label>
-
-        Kecepatan Motor
-
-        <strong id="speedValue">
-          50%
-        </strong>
-
-        <input
-          id="speed"
-          type="range"
-          min="10"
-          max="100"
-          value="50"
-          oninput="
-            updateSpeed(
-              this.value
-            )
-          "
-        >
-
-      </label>
-
-      <div class="grid2">
-
-        <label>
-
-          Menit
-
-          <input
-            id="durationMin"
-            type="number"
-            min="0"
-            max="60"
-            value="0"
-            oninput="
-              updateDuration()
-            "
-          >
-
-        </label>
-
-        <label>
-
-          Detik
-
-          <input
-            id="durationSec"
-            type="number"
-            min="0"
-            max="59"
-            value="10"
-            oninput="
-              updateDuration()
-            "
-          >
-
-        </label>
-
-      </div>
-
-      <div
-        id="durationValue"
-        class="msg"
-      >
-        0 menit 10 detik
-      </div>
-
-      <div
-        class="actions"
-        style="margin-top:15px"
-      >
-
-        <button
-          class="primary"
-          onclick="
-            feedNow()
-          "
-        >
-          Beri Pakan Sekarang
-        </button>
-
-        <button
-          class="danger"
-          onclick="
-            stopNow()
-          "
-        >
-          STOP
-        </button>
-
-      </div>
-
-      <div
-        id="controlMsg"
-        class="msg"
-      ></div>
-
-    </div>
-
-  </section>
-
-  <section
-    id="jadwal"
-    class="panel"
-  >
-
-    <div class="card">
-
-      <h2>
-        Jadwal Pemberian Pakan
-      </h2>
-
-      <p class="msg">
-
-        Pengaturan di bawah dikirim
-        ke ESP32 melalui RabbitMQ MQTT.
-        ESP32 tetap menjadi perangkat
-        yang menjalankan jadwal.
-
-      </p>
-
-    </div>
-
-    ${scheduleCards}
-
-  </section>
-
-  <section
-    id="histori"
-    class="panel"
-  >
-
-    <div class="card">
-
-      <h2>
-        Histori
-      </h2>
-
-      <p class="msg">
-
-        Histori pada tahap ini mengikuti
-        data yang tersedia dari
-        perangkat/backend.
-
-      </p>
-
-      <div
-        id="historyBox"
-        class="msg"
-      >
-
-        Belum ada histori yang dikirim
-        oleh ESP32.
-
-      </div>
-
-    </div>
-
-  </section>
-
-  <div class="footer">
-
-    Feeder Ikan IoT • ${FEEDER_ID}
-
-  </div>
-
+<section id="kontrol" class="page active">
+<div class="card"><h2>Status Feeder</h2><div id="status" class="status">Memuat...</div></div>
+<div class="card">
+<h2>Kontrol Manual</h2>
+<label>Kecepatan Motor: <span id="speedValue">50</span>%</label>
+<input id="speed" type="range" min="10" max="100" value="50" oninput="speedValue.textContent=this.value">
+<label>Durasi Motor (detik)</label>
+<input id="duration" type="number" min="1" max="3600" value="10">
+<div class="row" style="margin-top:16px">
+<button class="action start" onclick="feed()">▶ Mulai Pakan</button>
+<button class="action stop" onclick="stopMotor()">■ Stop</button>
+</div>
+</div>
+</section>
+
+<section id="jadwal" class="page">
+<div class="card"><h2>Jadwal Pemberian Pakan</h2><div id="scheduleList">Memuat jadwal...</div></div>
+</section>
+
+<section id="histori" class="page">
+<div class="card"><h2>Histori</h2><div id="historyList">Belum ada histori.</div></div>
+</section>
 </div>
 
 <script>
-
-function showTab(
-  id,
-  btn
-) {
-
-  document
-    .querySelectorAll('.panel')
-    .forEach(
-      x =>
-        x.classList
-          .remove('active')
-    );
-
-  document
-    .querySelectorAll('.tab')
-    .forEach(
-      x =>
-        x.classList
-          .remove('active')
-    );
-
-  document
-    .getElementById(id)
-    .classList
-    .add('active');
-
-  btn.classList
-    .add('active');
-
-  if (
-    id === 'jadwal'
-  ) {
-
-    getSchedules();
-
-  }
-
+function showPage(id,btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+  if(id==='jadwal') loadSchedules();
+  if(id==='histori') loadHistory();
+  if(id==='kontrol') loadStatus();
 }
 
-function updateSpeed(v) {
-
-  document
-    .getElementById(
-      'speedValue'
-    )
-    .textContent =
-      v + '%';
-
+async function feed(){
+  const speed=Number(document.getElementById('speed').value);
+  const duration=Number(document.getElementById('duration').value);
+  const r=await fetch('/api/feed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({speed,duration})});
+  const d=await r.json();
+  alert(d.message||'Perintah dikirim');
+  loadStatus();
 }
 
-function updateDuration() {
-
-  let m =
-    Math.max(
-      0,
-      Math.min(
-        60,
-        parseInt(
-          document
-            .getElementById(
-              'durationMin'
-            )
-            .value
-        ) || 0
-      )
-    );
-
-  let s =
-    Math.max(
-      0,
-      Math.min(
-        59,
-        parseInt(
-          document
-            .getElementById(
-              'durationSec'
-            )
-            .value
-        ) || 0
-      )
-    );
-
-  if (
-    m === 60
-  ) {
-
-    s = 0;
-
-  }
-
-  document
-    .getElementById(
-      'durationMin'
-    )
-    .value = m;
-
-  document
-    .getElementById(
-      'durationSec'
-    )
-    .value = s;
-
-  document
-    .getElementById(
-      'durationValue'
-    )
-    .textContent =
-      m +
-      ' menit ' +
-      s +
-      ' detik';
-
+async function stopMotor(){
+  const r=await fetch('/api/stop',{method:'POST'});
+  const d=await r.json();
+  alert(d.message||'Stop dikirim');
+  loadStatus();
 }
 
-function updateScheduleSpeed(
-  i,
-  v
-) {
-
-  document
-    .getElementById(
-      'jspeedValue' + i
-    )
-    .textContent =
-      v + '%';
-
+async function loadStatus(){
+  try{
+    const r=await fetch('/api/status');
+    const d=await r.json();
+    const online=d.status!=='offline';
+    document.getElementById('status').innerHTML=
+      '<b>Device:</b> '+(d.device||'FEEDER-001')+
+      '<br><b>Status:</b> '+(online?'Online':'Offline')+
+      '<br><b>Motor:</b> '+(d.motor?'Berjalan':'Berhenti')+
+      '<br><b>Kecepatan:</b> '+(d.speed||0)+'%'+
+      '<br><b>Durasi:</b> '+(d.duration||0)+' detik'+
+      '<br><span class="small">'+(d.reason||'')+'</span>';
+  }catch(e){document.getElementById('status').textContent='Gagal mengambil status';}
 }
 
-async function feedNow() {
-
-  const m =
-    parseInt(
-      document
-        .getElementById(
-          'durationMin'
-        )
-        .value
-    ) || 0;
-
-  const s =
-    parseInt(
-      document
-        .getElementById(
-          'durationSec'
-        )
-        .value
-    ) || 0;
-
-  const duration =
-    (m * 60) + s;
-
-  const speed =
-    parseInt(
-      document
-        .getElementById(
-          'speed'
-        )
-        .value
-    );
-
-  if (
-    duration < 1 ||
-    duration > 3600
-  ) {
-
-    alert(
-      'Durasi harus 1 detik sampai 60 menit.'
-    );
-
-    return;
-
-  }
-
-  const r =
-    await fetch(
-      '/api/feed',
-      {
-        method: 'POST',
-
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
-
-        body:
-          JSON.stringify({
-            speed,
-            duration
-          })
-
-      }
-    );
-
-  const d =
-    await r.json();
-
-  document
-    .getElementById(
-      'controlMsg'
-    )
-    .textContent =
-      d.message ||
-      d.error ||
-      'Selesai';
-
-  refreshStatus();
-
+async function loadSchedules(){
+  const r=await fetch('/api/schedules');
+  const data=await r.json();
+  document.getElementById('scheduleList').innerHTML=data.map((s,i)=>\`
+<div class="schedule">
+<h3>Jadwal \${i+1}</h3>
+<div class="switch"><input id="aktif\${i}" type="checkbox" \${s.aktif?'checked':''}><span>Aktif</span></div>
+<label>Waktu</label>
+<input id="time\${i}" type="time" value="\${s.time}">
+<label>Kecepatan Motor (%)</label>
+<input id="speed\${i}" type="number" min="10" max="100" value="\${s.speed}">
+<label>Durasi Motor (detik)</label>
+<input id="duration\${i}" type="number" min="1" max="3600" value="\${s.duration}">
+<button class="action save" style="margin-top:14px" onclick="simpanJadwal(\${i})">Simpan Jadwal</button>
+</div>\`).join('');
 }
 
-async function stopNow() {
-
-  const r =
-    await fetch(
-      '/api/stop',
-      {
-        method: 'POST'
-      }
-    );
-
-  const d =
-    await r.json();
-
-  document
-    .getElementById(
-      'controlMsg'
-    )
-    .textContent =
-      d.message ||
-      d.error ||
-      'Selesai';
-
-  refreshStatus();
-
-}
-
-async function simpanJadwal(i) {
-
-  const payload = {
-
-    index: i,
-
-    aktif:
-      document
-        .getElementById(
-          'aktif' + i
-        )
-        .checked
-        ? 1
-        : 0,
-
-    time:
-      document
-        .getElementById(
-          'time' + i
-        )
-        .value,
-
-    speed:
-      parseInt(
-        document
-          .getElementById(
-            'speed' + i
-          )
-          .value
-      ) || 50,
-
-    duration:
-      parseInt(
-        document
-          .getElementById(
-            'duration' + i
-          )
-          .value
-      ) || 1
-
+async function simpanJadwal(i){
+  const payload={
+    index:i,
+    aktif:document.getElementById('aktif'+i).checked,
+    time:document.getElementById('time'+i).value,
+    speed:Number(document.getElementById('speed'+i).value),
+    duration:Number(document.getElementById('duration'+i).value)
   };
-
-  const box =
-    document
-      .getElementById(
-        'scheduleMsg' + i
-      );
-
-  box.textContent =
-    'Menyimpan...';
-
-  try {
-
-    const r =
-      await fetch(
-        '/api/schedule',
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type':
-              'application/json'
-          },
-
-          body:
-            JSON.stringify(
-              payload
-            )
-
-        }
-      );
-
-    const d =
-      await r.json();
-
-    box.textContent =
-      d.message ||
-      d.error ||
-      'Selesai';
-
-    if (r.ok) {
-
-      getSchedules();
-
-    }
-
-  } catch (e) {
-
-    box.textContent =
-      'Gagal menghubungi server';
-
-  }
-
+  const r=await fetch('/api/schedule',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const d=await r.json();
+  alert(d.message||'Jadwal disimpan');
+  if(d.success) loadSchedules();
 }
 
-async function getSchedules() {
-
-  try {
-
-    const r =
-      await fetch(
-        '/api/schedules'
-      );
-
-    const d =
-      await r.json();
-
-    if (
-      Array.isArray(
-        d.schedules
-      )
-    ) {
-
-      d.schedules.forEach(
-        s => {
-
-          const i =
-            s.index;
-
-          if (
-            document
-              .getElementById(
-                'aktif' + i
-              )
-          ) {
-
-            document
-              .getElementById(
-                'aktif' + i
-              )
-              .checked =
-                !!s.aktif;
-
-            document
-              .getElementById(
-                'time' + i
-              )
-              .value =
-                String(
-                  s.jam
-                )
-                  .padStart(
-                    2,
-                    '0'
-                  ) +
-                ':' +
-                String(
-                  s.menit
-                )
-                  .padStart(
-                    2,
-                    '0'
-                  );
-
-            document
-              .getElementById(
-                'speed' + i
-              )
-              .value =
-                s.speed;
-
-            document
-              .getElementById(
-                'jspeedValue' + i
-              )
-              .textContent =
-                s.speed + '%';
-
-            document
-              .getElementById(
-                'duration' + i
-              )
-              .value =
-                s.duration;
-
-          }
-
-        }
-      );
-
-    }
-
-  } catch (e) {
-
-    console.log(e);
-
-  }
-
+async function loadHistory(){
+  try{
+    const r=await fetch('/api/history');
+    const data=await r.json();
+    document.getElementById('historyList').innerHTML=data.length?data.map(h=>\`
+<div class="history-item">
+<b>\${new Date(h.time).toLocaleString('id-ID')}</b>
+<br>Kecepatan: \${h.speed}%
+<br>Durasi: \${h.duration} detik
+<br><span class="small">\${h.status||''}</span>
+</div>\`).join(''):'Belum ada histori.';
+  }catch(e){document.getElementById('historyList').textContent='Belum ada histori.';}
 }
 
-async function refreshStatus() {
-
-  try {
-
-    const r =
-      await fetch(
-        '/api/status'
-      );
-
-    const d =
-      await r.json();
-
-    document
-      .getElementById(
-        'statusValue'
-      )
-      .textContent =
-        d.status ||
-        'offline';
-
-    document
-      .getElementById(
-        'speedStatus'
-      )
-      .textContent =
-        (d.speed ?? 50) +
-        '%';
-
-    document
-      .getElementById(
-        'durationStatus'
-      )
-      .textContent =
-        (d.duration ?? 10) +
-        ' detik';
-
-    document
-      .getElementById(
-        'motorStatus'
-      )
-      .textContent =
-        d.motor
-          ? 'Motor sedang berjalan'
-          : 'Motor berhenti';
-
-    const online =
-      d.status &&
-      d.status !==
-        'offline';
-
-    document
-      .querySelector(
-        '.dot'
-      )
-      .classList
-      .toggle(
-        'on',
-        online
-      );
-
-    document
-      .getElementById(
-        'connectionText'
-      )
-      .textContent =
-        online
-          ? 'Terhubung'
-          : 'Offline';
-
-  } catch (e) {}
-
-}
-
-setInterval(
-  refreshStatus,
-  3000
-);
-
-refreshStatus();
-
+loadStatus();
+setInterval(loadStatus,5000);
 </script>
-
 </body>
-
-</html>`;
-
-}
-
-app.get(
-  '/',
-  (req, res) =>
-    res.send(page())
-);
-
-app.get(
-  '/api/status',
-  (req, res) => {
-
-    res.json({
-      ...feederStatus,
-
-      mqttConnected:
-        mqttClient.connected
-    });
-
-  }
-);
-
-app.get(
-  '/api/schedules',
-  (req, res) => {
-
-    res.json({
-
-      device:
-        FEEDER_ID,
-
-      schedules
-
-    });
-
-  }
-);
-
-app.post(
-  '/api/feed',
-  (req, res) => {
-
-    const speed =
-      clamp(
-        Number(
-          req.body.speed
-        ),
-        10,
-        100
-      );
-
-    const duration =
-      clamp(
-        Number(
-          req.body.duration
-        ),
-        1,
-        3600
-      );
-
-    const ok =
-      publishCommand({
-
-        action:
-          'feed',
-
-        device:
-          FEEDER_ID,
-
-        speed,
-
-        duration
-
-      });
-
-    if (!ok) {
-
-      return res
-        .status(503)
-        .json({
-          error:
-            'MQTT belum terhubung ke RabbitMQ.'
-        });
-
-    }
-
-    res.json({
-
-      success: true,
-
-      message:
-        'Perintah pemberian pakan dikirim ke ESP32.'
-
-    });
-
-  }
-);
-
-app.post(
-  '/api/stop',
-  (req, res) => {
-
-    const ok =
-      publishCommand({
-
-        action:
-          'stop',
-
-        device:
-          FEEDER_ID
-
-      });
-
-    if (!ok) {
-
-      return res
-        .status(503)
-        .json({
-          error:
-            'MQTT belum terhubung ke RabbitMQ.'
-        });
-
-    }
-
-    res.json({
-
-      success: true,
-
-      message:
-        'Perintah STOP dikirim ke ESP32.'
-
-    });
-
-  }
-);
-
-app.post(
-  '/api/schedule',
-  (req, res) => {
-
-    const index =
-      Number(
-        req.body.index
-      );
-
-    if (
-      !validIndex(index)
-    ) {
-
-      return res
-        .status(400)
-        .json({
-          error:
-            'Index jadwal harus 0, 1, atau 2.'
-        });
-
-    }
-
-    /*
-      Format waktu dari halaman:
-      HH:MM
-
-      Contoh:
-      07:30
-      12:00
-      18:45
-    */
-
-    const time =
-      String(
-        req.body.time || ''
-      ).trim();
-
-    const match =
-      /^(\d{2}):(\d{2})$/
-        .exec(time);
-
-    if (!match) {
-
-      return res
-        .status(400)
-        .json({
-          error:
-            'Format waktu harus HH:MM.'
-        });
-
-    }
-
-    const jam =
-      Number(
-        match[1]
-      );
-
-    const menit =
-      Number(
-        match[2]
-      );
-
-    if (
-      jam < 0 ||
-      jam > 23 ||
-      menit < 0 ||
-      menit > 59
-    ) {
-
-      return res
-        .status(400)
-        .json({
-          error:
-            'Waktu tidak valid.'
-        });
-
-    }
-
-    const schedule =
-      normalizeSchedule({
-
-        index,
-
-        aktif:
-          req.body.aktif,
-
-        jam,
-
-        menit,
-
-        speed:
-          req.body.speed,
-
-        duration:
-          req.body.duration
-
-      });
-
-    const ok =
-      publishCommand({
-
-        action:
-          'schedule_save',
-
-        device:
-          FEEDER_ID,
-
-        index:
-          schedule.index,
-
-        aktif:
-          schedule.aktif
-            ? 1
-            : 0,
-
-        jam:
-          schedule.jam,
-
-        menit:
-          schedule.menit,
-
-        speed:
-          schedule.speed,
-
-        duration:
-          schedule.duration
-
-      });
-
-    if (!ok) {
-
-      return res
-        .status(503)
-        .json({
-          error:
-            'MQTT belum terhubung ke RabbitMQ.'
-        });
-
-    }
-
-    schedules[index] =
-      schedule;
-
-    res.json({
-
-      success: true,
-
-      message:
-        `Jadwal ${index + 1} dikirim ke ESP32.`,
-
-      schedule
-
-    });
-
-  }
-);
-
-app.post(
-  '/api/schedules/get',
-  (req, res) => {
-
-    const ok =
-      publishCommand({
-
-        action:
-          'schedule_get',
-
-        device:
-          FEEDER_ID
-
-      });
-
-    if (!ok) {
-
-      return res
-        .status(503)
-        .json({
-          error:
-            'MQTT belum terhubung ke RabbitMQ.'
-        });
-
-    }
-
-    res.json({
-
-      success: true,
-
-      message:
-        'Permintaan jadwal dikirim ke ESP32.'
-
-    });
-
-  }
-);
-
-app.listen(
-  PORT,
-  () => {
-
-    console.log(
-      `Web Superb berjalan di port ${PORT}`
-    );
-
-    console.log(
-      `Feeder: ${FEEDER_ID}`
-    );
-
-    console.log(
-      `MQTT: ${MQTT_HOST}:${MQTT_PORT}`
-    );
-
-    console.log(
-      `Command topic: ${COMMAND_TOPIC}`
-    );
-
-    console.log(
-      `Status topic: ${STATUS_TOPIC}`
-    );
-
-  }
-);
+</html>`);
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server berjalan di port ${PORT}`);
+});
