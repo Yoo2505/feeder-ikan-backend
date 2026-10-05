@@ -5,14 +5,33 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const MQTT_HOST = process.env.MQTT_HOST || "mqtt://195.35.23.135";
-const MQTT_PORT = Number(process.env.MQTT_PORT || 1883);
-const MQTT_USER = process.env.MQTT_USER || "/ai-automation:mhs_kuliah";
-const MQTT_PASSWORD = process.env.MQTT_PASSWORD || "";
+
+const MQTT_HOST =
+  process.env.MQTT_HOST || "mqtt://195.35.23.135";
+
+const MQTT_PORT =
+  Number(process.env.MQTT_PORT || 1883);
+
+const MQTT_USER =
+  process.env.MQTT_USER || "/ai-automation:mhs_kuliah";
+
+const MQTT_PASSWORD =
+  process.env.MQTT_PASSWORD || "";
 
 const FEEDER_ID = "FEEDER-001";
-const COMMAND_TOPIC = `feeder/${FEEDER_ID}/command`;
-const STATUS_TOPIC = `feeder/${FEEDER_ID}/status`;
+
+const COMMAND_TOPIC =
+  `feeder/${FEEDER_ID}/command`;
+
+const STATUS_TOPIC =
+  `feeder/${FEEDER_ID}/status`;
+
+
+/*
+============================================================
+STATUS FEEDER
+============================================================
+*/
 
 let latestStatus = {
   device: FEEDER_ID,
@@ -23,6 +42,13 @@ let latestStatus = {
   reason: "backend_start",
   lastFeeding: null
 };
+
+
+/*
+============================================================
+JADWAL
+============================================================
+*/
 
 let schedules = [
   {
@@ -48,7 +74,21 @@ let schedules = [
   }
 ];
 
+
+/*
+============================================================
+HISTORI
+============================================================
+*/
+
 let history = [];
+
+
+/*
+============================================================
+MQTT
+============================================================
+*/
 
 const mqttClient = mqtt.connect(MQTT_HOST, {
   port: MQTT_PORT,
@@ -57,343 +97,526 @@ const mqttClient = mqtt.connect(MQTT_HOST, {
   reconnectPeriod: 5000
 });
 
+
+/*
+============================================================
+MQTT CONNECT
+============================================================
+*/
+
 mqttClient.on("connect", () => {
+
   console.log("MQTT TERHUBUNG");
 
   mqttClient.subscribe(
     STATUS_TOPIC,
     { qos: 1 },
     (err) => {
+
       if (err) {
-        console.error("Subscribe status gagal:", err.message);
+
+        console.error(
+          "Subscribe status gagal:",
+          err.message
+        );
+
       } else {
-        console.log("Subscribe:", STATUS_TOPIC);
+
+        console.log(
+          "Subscribe:",
+          STATUS_TOPIC
+        );
       }
     }
   );
 
+
+  // Minta status ESP32
   mqttClient.publish(
     COMMAND_TOPIC,
     JSON.stringify({
       action: "status",
       device: FEEDER_ID
     }),
-    { qos: 1 }
+    {
+      qos: 1
+    }
   );
 
+
+  // Minta jadwal ESP32
   mqttClient.publish(
     COMMAND_TOPIC,
     JSON.stringify({
       action: "schedule_get",
       device: FEEDER_ID
     }),
-    { qos: 1 }
+    {
+      qos: 1
+    }
   );
-});
 
-mqttClient.on("reconnect", () => {
-  console.log("MQTT mencoba reconnect...");
-});
-
-mqttClient.on("error", (err) => {
-  console.error("MQTT error:", err.message);
-});
-
-mqttClient.on("message", (topic, message) => {
-  if (topic !== STATUS_TOPIC) return;
-
-  try {
-    const data = JSON.parse(message.toString());
-
-    console.log("STATUS ESP32:", data);
-
-    /*
-     * ==========================================================
-     * SINKRONISASI JADWAL DARI ESP32
-     * ==========================================================
-     */
-
-    if (
-      data.status === "schedule_state" &&
-      Array.isArray(data.schedules)
-    ) {
-      schedules = data.schedules.map((s, i) => ({
-        index: Number(s.index ?? i),
-
-        aktif:
-          Number(s.aktif) === 1 ||
-          s.aktif === true,
-
-        time:
-          `${String(Number(s.jam) || 0).padStart(2, "0")}:` +
-          `${String(Number(s.menit) || 0).padStart(2, "0")}`,
-
-        speed: Number(s.speed) || 50,
-
-        duration: Number(s.duration) || 10
-      }));
-
-      console.log("Jadwal tersinkronisasi:", schedules);
-
-    } else {
-
-      /*
-       * ========================================================
-       * UPDATE STATUS FEEDER
-       * ========================================================
-       */
-
-      latestStatus = {
-        ...latestStatus,
-        ...data,
-        lastUpdate: new Date().toISOString()
-      };
-    }
-
-    /*
-     * ==========================================================
-     * PENCATATAN HISTORI PEMBERIAN PAKAN
-     * ==========================================================
-     *
-     * Jangan langsung menggunakan data.duration dari MQTT
-     * sebagai durasi histori.
-     *
-     * Untuk jadwal, backend mencocokkan waktu event dengan
-     * jadwal aktif dan mengambil speed + duration dari konfigurasi
-     * jadwal yang sudah tersimpan.
-     */
-
-    if (
-      data.status === "feeding" ||
-      data.status === "running"
-    ) {
-
-      const now = new Date();
-
-      let eventSpeed = Number(data.speed) || 0;
-      let eventDuration = Number(data.duration) || 0;
-
-      let eventSource = "Manual";
-
-      /*
-       * ========================================================
-       * AMBIL JAM WIB
-       * ========================================================
-       */
-
-      const parts = new Intl.DateTimeFormat(
-        "en-GB",
-        {
-          timeZone: "Asia/Jakarta",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false
-        }
-      ).formatToParts(now);
-
-      const currentHour = Number(
-        parts.find(
-          p => p.type === "hour"
-        )?.value || 0
-      );
-
-      const currentMinute = Number(
-        parts.find(
-          p => p.type === "minute"
-        )?.value || 0
-      );
-
-      const currentTotalMinutes =
-        currentHour * 60 +
-        currentMinute;
-
-      /*
-       * ========================================================
-       * CARI JADWAL YANG SESUAI
-       * ========================================================
-       */
-
-      let matchedSchedule = null;
-
-      let smallestDifference = Infinity;
-
-      for (const schedule of schedules) {
-
-        if (!schedule.aktif) {
-          continue;
-        }
-
-        const [sh, sm] =
-          String(schedule.time || "00:00")
-            .split(":")
-            .map(Number);
-
-        if (
-          !Number.isFinite(sh) ||
-          !Number.isFinite(sm)
-        ) {
-          continue;
-        }
-
-        const scheduleTotalMinutes =
-          sh * 60 +
-          sm;
-
-        const difference =
-          Math.abs(
-            scheduleTotalMinutes -
-            currentTotalMinutes
-          );
-
-        /*
-         * Toleransi 1 menit.
-         */
-
-        if (
-          difference <= 1 &&
-          difference < smallestDifference
-        ) {
-
-          smallestDifference = difference;
-
-          matchedSchedule = schedule;
-        }
-      }
-
-      /*
-       * ========================================================
-       * JIKA EVENT BERASAL DARI JADWAL
-       * ========================================================
-       */
-
-      if (matchedSchedule) {
-
-        eventSpeed =
-          Number(matchedSchedule.speed) ||
-          eventSpeed;
-
-        eventDuration =
-          Number(matchedSchedule.duration) ||
-          eventDuration;
-
-        eventSource =
-          `Jadwal ${Number(matchedSchedule.index) + 1}`;
-      }
-
-      /*
-       * ========================================================
-       * CEGAH HISTORI DUPLIKAT
-       * ========================================================
-       */
-
-      const duplicate =
-        history.some(h => {
-
-          const historyTime =
-            new Date(h.time).getTime();
-
-          const currentTime =
-            now.getTime();
-
-          return (
-            h.source === eventSource &&
-            Math.abs(
-              historyTime -
-              currentTime
-            ) < 10000
-          );
-        });
-
-      /*
-       * ========================================================
-       * SIMPAN HISTORI
-       * ========================================================
-       */
-
-      if (!duplicate) {
-
-        history.unshift({
-
-          time:
-            now.toISOString(),
-
-          speed:
-            eventSpeed,
-
-          duration:
-            eventDuration,
-
-          status:
-            "Selesai/berjalan",
-
-          source:
-            eventSource
-        });
-
-        /*
-         * Maksimal 50 histori.
-         */
-
-        history =
-          history.slice(0, 50);
-      }
-
-      /*
-       * ========================================================
-       * SIMPAN PENYEBARAN TERAKHIR
-       * ========================================================
-       */
-
-      latestStatus = {
-
-        ...latestStatus,
-
-        lastFeeding: {
-
-          time:
-            now.toISOString(),
-
-          speed:
-            eventSpeed,
-
-          duration:
-            eventDuration,
-
-          source:
-            eventSource
-        }
-      };
-    }
-
-  } catch (err) {
-
-    console.error(
-      "Payload MQTT bukan JSON valid:",
-      err.message
-    );
-  }
 });
 
 
 /*
- * ============================================================
- * FUNGSI KIRIM COMMAND MQTT
- * ============================================================
- */
+============================================================
+MQTT RECONNECT
+============================================================
+*/
+
+mqttClient.on(
+  "reconnect",
+  () => {
+    console.log(
+      "MQTT mencoba reconnect..."
+    );
+  }
+);
+
+
+/*
+============================================================
+MQTT ERROR
+============================================================
+*/
+
+mqttClient.on(
+  "error",
+  (err) => {
+
+    console.error(
+      "MQTT error:",
+      err.message
+    );
+
+  }
+);
+
+
+/*
+============================================================
+MQTT MESSAGE
+============================================================
+*/
+
+mqttClient.on(
+  "message",
+  (topic, message) => {
+
+    if (topic !== STATUS_TOPIC) {
+      return;
+    }
+
+    try {
+
+      const data =
+        JSON.parse(
+          message.toString()
+        );
+
+
+      console.log(
+        "STATUS ESP32:",
+        data
+      );
+
+
+      /*
+      ========================================================
+      SINKRONISASI JADWAL
+      ========================================================
+      */
+
+      if (
+        data.status === "schedule_state" &&
+        Array.isArray(data.schedules)
+      ) {
+
+        schedules =
+          data.schedules.map(
+            (s, i) => {
+
+              return {
+
+                index:
+                  Number(
+                    s.index ?? i
+                  ),
+
+                aktif:
+                  Number(s.aktif) === 1 ||
+                  s.aktif === true,
+
+                time:
+                  String(
+                    Number(s.jam) || 0
+                  ).padStart(2, "0")
+                  +
+                  ":" +
+                  String(
+                    Number(s.menit) || 0
+                  ).padStart(2, "0"),
+
+                speed:
+                  Number(s.speed) || 50,
+
+                duration:
+                  Number(s.duration) || 10
+              };
+
+            }
+          );
+
+
+        console.log(
+          "Jadwal tersinkronisasi:",
+          schedules
+        );
+
+
+      } else {
+
+        /*
+        ======================================================
+        UPDATE STATUS
+        ======================================================
+        */
+
+        latestStatus = {
+
+          ...latestStatus,
+
+          ...data,
+
+          lastUpdate:
+            new Date().toISOString()
+        };
+
+      }
+
+
+      /*
+      ========================================================
+      CATAT HISTORI PEMBERIAN PAKAN
+      ========================================================
+      
+      Untuk jadwal:
+      backend mengambil speed dan duration dari jadwal
+      yang sudah tersimpan.
+
+      Jadi tidak bergantung pada nilai duration MQTT
+      yang sebelumnya menyebabkan histori menjadi 1 detik.
+      ========================================================
+      */
+
+      if (
+        data.status === "feeding" ||
+        data.status === "running"
+      ) {
+
+        const now =
+          new Date();
+
+
+        let eventSpeed =
+          Number(data.speed) || 0;
+
+
+        let eventDuration =
+          Number(data.duration) || 0;
+
+
+        let eventSource =
+          "Manual";
+
+
+        /*
+        ======================================================
+        WAKTU WIB
+        ======================================================
+        */
+
+        const parts =
+          new Intl.DateTimeFormat(
+            "en-GB",
+            {
+              timeZone: "Asia/Jakarta",
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false
+            }
+          ).formatToParts(now);
+
+
+        const currentHour =
+          Number(
+            parts.find(
+              p => p.type === "hour"
+            )?.value || 0
+          );
+
+
+        const currentMinute =
+          Number(
+            parts.find(
+              p => p.type === "minute"
+            )?.value || 0
+          );
+
+
+        const currentTotalMinutes =
+          currentHour * 60 +
+          currentMinute;
+
+
+        /*
+        ======================================================
+        CARI JADWAL YANG SESUAI
+        ======================================================
+        */
+
+        let matchedSchedule =
+          null;
+
+
+        let smallestDifference =
+          Infinity;
+
+
+        for (
+          const schedule of schedules
+        ) {
+
+          if (!schedule.aktif) {
+            continue;
+          }
+
+
+          const timeParts =
+            String(
+              schedule.time || "00:00"
+            )
+              .split(":")
+              .map(Number);
+
+
+          const sh =
+            timeParts[0];
+
+
+          const sm =
+            timeParts[1];
+
+
+          if (
+            !Number.isFinite(sh) ||
+            !Number.isFinite(sm)
+          ) {
+
+            continue;
+          }
+
+
+          const scheduleTotalMinutes =
+            sh * 60 + sm;
+
+
+          const difference =
+            Math.abs(
+              scheduleTotalMinutes -
+              currentTotalMinutes
+            );
+
+
+          /*
+          ----------------------------------------------------
+          Toleransi 1 menit
+          ----------------------------------------------------
+          */
+
+          if (
+            difference <= 1 &&
+            difference < smallestDifference
+          ) {
+
+            smallestDifference =
+              difference;
+
+            matchedSchedule =
+              schedule;
+
+          }
+
+        }
+
+
+        /*
+        ======================================================
+        EVENT BERASAL DARI JADWAL
+        ======================================================
+        */
+
+        if (matchedSchedule) {
+
+          eventSpeed =
+            Number(
+              matchedSchedule.speed
+            ) || eventSpeed;
+
+
+          eventDuration =
+            Number(
+              matchedSchedule.duration
+            ) || eventDuration;
+
+
+          eventSource =
+            `Jadwal ${
+              Number(
+                matchedSchedule.index
+              ) + 1
+            }`;
+
+        }
+
+
+        /*
+        ======================================================
+        CEGAH DUPLIKAT
+        ======================================================
+        */
+
+        const duplicate =
+          history.some(
+            (h) => {
+
+              const historyTime =
+                new Date(
+                  h.time
+                ).getTime();
+
+
+              const currentTime =
+                now.getTime();
+
+
+              return (
+                h.source ===
+                  eventSource &&
+                Math.abs(
+                  historyTime -
+                  currentTime
+                ) < 10000
+              );
+
+            }
+          );
+
+
+        /*
+        ======================================================
+        SIMPAN HISTORI
+        ======================================================
+        */
+
+        if (!duplicate) {
+
+          history.unshift({
+
+            time:
+              now.toISOString(),
+
+            speed:
+              eventSpeed,
+
+            duration:
+              eventDuration,
+
+            status:
+              "Selesai/berjalan",
+
+            source:
+              eventSource
+
+          });
+
+
+          history =
+            history.slice(
+              0,
+              50
+            );
+
+        }
+
+
+        /*
+        ======================================================
+        SIMPAN PENYEBARAN TERAKHIR
+        ======================================================
+        */
+
+        latestStatus = {
+
+          ...latestStatus,
+
+          lastFeeding: {
+
+            time:
+              now.toISOString(),
+
+            speed:
+              eventSpeed,
+
+            duration:
+              eventDuration,
+
+            source:
+              eventSource
+
+          }
+
+        };
+
+      }
+
+    } catch (err) {
+
+      console.error(
+        "Payload MQTT bukan JSON valid:",
+        err.message
+      );
+
+    }
+
+  }
+);
+
+
+/*
+============================================================
+FUNGSI PUBLISH COMMAND
+============================================================
+*/
 
 function publishCommand(payload) {
 
   return new Promise(
     (resolve, reject) => {
 
-      if (!mqttClient.connected) {
+      if (
+        !mqttClient.connected
+      ) {
 
         return reject(
           new Error(
             "MQTT belum terhubung"
           )
         );
+
       }
+
 
       mqttClient.publish(
 
@@ -417,19 +640,24 @@ function publishCommand(payload) {
           } else {
 
             resolve();
+
           }
+
         }
+
       );
+
     }
   );
+
 }
 
 
 /*
- * ============================================================
- * API STATUS
- * ============================================================
- */
+============================================================
+API STATUS
+============================================================
+*/
 
 app.get(
   "/api/status",
@@ -438,15 +666,16 @@ app.get(
     res.json(
       latestStatus
     );
+
   }
 );
 
 
 /*
- * ============================================================
- * API MANUAL FEED
- * ============================================================
- */
+============================================================
+API MANUAL FEED
+============================================================
+*/
 
 app.post(
   "/api/feed",
@@ -465,6 +694,7 @@ app.post(
           )
         );
 
+
       const duration =
         Math.max(
           1,
@@ -476,6 +706,7 @@ app.post(
           )
         );
 
+
       await publishCommand({
 
         action:
@@ -486,7 +717,9 @@ app.post(
 
         duration:
           duration
+
       });
+
 
       res.json({
 
@@ -501,7 +734,9 @@ app.post(
 
         duration:
           duration
+
       });
+
 
     } catch (err) {
 
@@ -512,17 +747,20 @@ app.post(
 
         message:
           err.message
+
       });
+
     }
+
   }
 );
 
 
 /*
- * ============================================================
- * API STOP
- * ============================================================
- */
+============================================================
+API STOP
+============================================================
+*/
 
 app.post(
   "/api/stop",
@@ -534,6 +772,7 @@ app.post(
         action: "stop"
       });
 
+
       res.json({
 
         success:
@@ -541,7 +780,9 @@ app.post(
 
         message:
           "Perintah stop dikirim"
+
       });
+
 
     } catch (err) {
 
@@ -552,17 +793,20 @@ app.post(
 
         message:
           err.message
+
       });
+
     }
+
   }
 );
 
 
 /*
- * ============================================================
- * API GET SCHEDULE
- * ============================================================
- */
+============================================================
+API GET SCHEDULES
+============================================================
+*/
 
 app.get(
   "/api/schedules",
@@ -571,15 +815,16 @@ app.get(
     res.json(
       schedules
     );
+
   }
 );
 
 
 /*
- * ============================================================
- * API SAVE SCHEDULE
- * ============================================================
- */
+============================================================
+API SAVE SCHEDULE
+============================================================
+*/
 
 app.post(
   "/api/schedule",
@@ -592,6 +837,7 @@ app.post(
           req.body.index
         );
 
+
       if (
         ![0, 1, 2].includes(index)
       ) {
@@ -603,22 +849,28 @@ app.post(
 
           message:
             "Index jadwal tidak valid"
+
         });
+
       }
+
 
       const aktif =
         req.body.aktif === true ||
         req.body.aktif === 1 ||
         req.body.aktif === "1";
 
+
       const time =
         String(
           req.body.time || ""
         );
 
+
       const match =
         /^([01]\d|2[0-3]):([0-5]\d)$/
           .exec(time);
+
 
       if (!match) {
 
@@ -629,18 +881,23 @@ app.post(
 
           message:
             "Format waktu harus HH:MM"
+
         });
+
       }
+
 
       const jam =
         Number(
           match[1]
         );
 
+
       const menit =
         Number(
           match[2]
         );
+
 
       const speed =
         Math.max(
@@ -653,6 +910,7 @@ app.post(
           )
         );
 
+
       const duration =
         Math.max(
           1,
@@ -664,9 +922,12 @@ app.post(
           )
         );
 
+
       /*
-       * Kirim konfigurasi jadwal ke ESP32.
-       */
+      --------------------------------------------------------
+      KIRIM JADWAL KE ESP32
+      --------------------------------------------------------
+      */
 
       await publishCommand({
 
@@ -690,11 +951,15 @@ app.post(
 
         duration:
           duration
+
       });
 
+
       /*
-       * Simpan juga di backend.
-       */
+      --------------------------------------------------------
+      SIMPAN JADWAL DI BACKEND
+      --------------------------------------------------------
+      */
 
       schedules[index] = {
 
@@ -712,7 +977,9 @@ app.post(
 
         duration:
           duration
+
       };
+
 
       res.json({
 
@@ -724,7 +991,9 @@ app.post(
 
         schedule:
           schedules[index]
+
       });
+
 
     } catch (err) {
 
@@ -735,17 +1004,20 @@ app.post(
 
         message:
           err.message
+
       });
+
     }
+
   }
 );
 
 
 /*
- * ============================================================
- * API REQUEST SCHEDULE GET
- * ============================================================
- */
+============================================================
+API REQUEST SCHEDULE GET
+============================================================
+*/
 
 app.get(
   "/api/schedules/get",
@@ -757,7 +1029,9 @@ app.get(
 
         action:
           "schedule_get"
+
       });
+
 
       res.json({
 
@@ -769,7 +1043,9 @@ app.get(
 
         schedules:
           schedules
+
       });
+
 
     } catch (err) {
 
@@ -780,17 +1056,20 @@ app.get(
 
         message:
           err.message
+
       });
+
     }
+
   }
 );
 
 
 /*
- * ============================================================
- * API HISTORY
- * ============================================================
- */
+============================================================
+API HISTORY
+============================================================
+*/
 
 app.get(
   "/api/history",
@@ -799,15 +1078,16 @@ app.get(
     res.json(
       history
     );
+
   }
 );
 
 
 /*
- * ============================================================
- * WEB INTERFACE
- * ============================================================
- */
+============================================================
+WEB INTERFACE
+============================================================
+*/
 
 app.get(
   "/",
@@ -831,38 +1111,38 @@ app.get(
 <style>
 
 *{
-  box-sizing:border-box
+  box-sizing:border-box;
 }
 
 body{
   margin:0;
   font-family:Arial,sans-serif;
   background:#f4f7fb;
-  color:#172033
+  color:#172033;
 }
 
 header{
   background:#1565c0;
   color:white;
-  padding:18px 20px
+  padding:18px 20px;
 }
 
 header h1{
   margin:0;
-  font-size:22px
+  font-size:22px;
 }
 
 .container{
   max-width:900px;
   margin:auto;
-  padding:18px
+  padding:18px;
 }
 
 .tabs{
   display:flex;
   gap:8px;
   margin-bottom:18px;
-  flex-wrap:wrap
+  flex-wrap:wrap;
 }
 
 .tab{
@@ -871,20 +1151,20 @@ header h1{
   border-radius:10px;
   background:#dfe8f5;
   cursor:pointer;
-  font-weight:bold
+  font-weight:bold;
 }
 
 .tab.active{
   background:#1565c0;
-  color:white
+  color:white;
 }
 
 .page{
-  display:none
+  display:none;
 }
 
 .page.active{
-  display:block
+  display:block;
 }
 
 .card{
@@ -892,39 +1172,37 @@ header h1{
   border-radius:16px;
   padding:18px;
   margin-bottom:16px;
-  box-shadow:
-    0 3px 14px rgba(0,0,0,.07)
+  box-shadow:0 3px 14px rgba(0,0,0,.07);
 }
 
 .row{
   display:flex;
   gap:12px;
   align-items:center;
-  flex-wrap:wrap
+  flex-wrap:wrap;
 }
 
 label{
   font-weight:bold;
   display:block;
-  margin:10px 0 6px
+  margin:10px 0 6px;
 }
 
 input,
 button{
-  font:inherit
+  font:inherit;
 }
 
 input[type=number],
 input[type=time]{
   width:100%;
   padding:11px;
-  border:
-    1px solid #ccd5e2;
-  border-radius:9px
+  border:1px solid #ccd5e2;
+  border-radius:9px;
 }
 
 input[type=range]{
-  width:100%
+  width:100%;
 }
 
 button.action{
@@ -932,59 +1210,57 @@ button.action{
   border-radius:10px;
   padding:12px 18px;
   cursor:pointer;
-  font-weight:bold
+  font-weight:bold;
 }
 
 .start{
   background:#2e7d32;
-  color:white
+  color:white;
 }
 
 .stop{
   background:#c62828;
-  color:white
+  color:white;
 }
 
 .save{
   background:#1565c0;
-  color:white
+  color:white;
 }
 
 .status{
   padding:10px 12px;
   border-radius:10px;
   background:#eef3f9;
-  margin-top:12px
+  margin-top:12px;
 }
 
 .schedule{
-  border:
-    1px solid #e1e7ef;
+  border:1px solid #e1e7ef;
   border-radius:14px;
   padding:15px;
-  margin-bottom:14px
+  margin-bottom:14px;
 }
 
 .schedule h3{
-  margin-top:0
+  margin-top:0;
 }
 
 .switch{
   display:flex;
   align-items:center;
   gap:8px;
-  margin-bottom:10px
+  margin-bottom:10px;
 }
 
 .history-item{
-  border-bottom:
-    1px solid #e7ebf0;
-  padding:10px 0
+  border-bottom:1px solid #e7ebf0;
+  padding:10px 0;
 }
 
 .small{
   font-size:13px;
-  color:#667085
+  color:#667085;
 }
 
 </style>
@@ -1001,7 +1277,9 @@ button.action{
 
 </header>
 
+
 <div class="container">
+
 
 <div class="tabs">
 
@@ -1029,9 +1307,9 @@ Histori
 </div>
 
 
-<!-- ========================================================
+<!-- =====================================================
      KONTROL
-========================================================= -->
+====================================================== -->
 
 <section
   id="kontrol"
@@ -1062,9 +1340,7 @@ Kontrol Manual
 
 <label>
 Kecepatan Motor:
-<span id="speedValue">
-50
-</span>%
+<span id="speedValue">50</span>%
 </label>
 
 <input
@@ -1075,6 +1351,7 @@ Kecepatan Motor:
   value="50"
   oninput="speedValue.textContent=this.value"
 >
+
 
 <label>
 Durasi Motor (detik)
@@ -1087,6 +1364,7 @@ Durasi Motor (detik)
   max="3600"
   value="10"
 >
+
 
 <div
   class="row"
@@ -1114,9 +1392,9 @@ Durasi Motor (detik)
 </section>
 
 
-<!-- ========================================================
+<!-- =====================================================
      JADWAL
-========================================================= -->
+====================================================== -->
 
 <section
   id="jadwal"
@@ -1140,9 +1418,9 @@ Memuat jadwal...
 </section>
 
 
-<!-- ========================================================
+<!-- =====================================================
      HISTORI
-========================================================= -->
+====================================================== -->
 
 <section
   id="histori"
@@ -1165,16 +1443,17 @@ Belum ada histori.
 
 </section>
 
+
 </div>
 
 
 <script>
 
 /*
- * ==========================================================
- * NAVIGASI HALAMAN
- * ==========================================================
- */
+===========================================================
+NAVIGASI
+===========================================================
+*/
 
 function showPage(id, btn){
 
@@ -1184,37 +1463,44 @@ function showPage(id, btn){
       p => p.classList.remove('active')
     );
 
+
   document
     .querySelectorAll('.tab')
     .forEach(
       t => t.classList.remove('active')
     );
 
+
   document
     .getElementById(id)
     .classList.add('active');
 
+
   btn.classList.add('active');
+
 
   if(id === 'jadwal'){
     loadSchedules();
   }
 
+
   if(id === 'histori'){
     loadHistory();
   }
 
+
   if(id === 'kontrol'){
     loadStatus();
   }
+
 }
 
 
 /*
- * ==========================================================
- * MANUAL FEED
- * ==========================================================
- */
+===========================================================
+MANUAL FEED
+===========================================================
+*/
 
 async function feed(){
 
@@ -1225,6 +1511,7 @@ async function feed(){
         .value
     );
 
+
   const duration =
     Number(
       document
@@ -1232,10 +1519,12 @@ async function feed(){
         .value
     );
 
+
   const r =
     await fetch(
       '/api/feed',
       {
+
         method:'POST',
 
         headers:{
@@ -1248,26 +1537,31 @@ async function feed(){
             speed,
             duration
           })
+
       }
     );
 
+
   const d =
     await r.json();
+
 
   alert(
     d.message ||
     'Perintah dikirim'
   );
 
+
   loadStatus();
+
 }
 
 
 /*
- * ==========================================================
- * STOP MOTOR
- * ==========================================================
- */
+===========================================================
+STOP MOTOR
+===========================================================
+*/
 
 async function stopMotor(){
 
@@ -1279,23 +1573,27 @@ async function stopMotor(){
       }
     );
 
+
   const d =
     await r.json();
+
 
   alert(
     d.message ||
     'Stop dikirim'
   );
 
+
   loadStatus();
+
 }
 
 
 /*
- * ==========================================================
- * STATUS FEEDER
- * ==========================================================
- */
+===========================================================
+STATUS
+===========================================================
+*/
 
 async function loadStatus(){
 
@@ -1306,24 +1604,22 @@ async function loadStatus(){
         '/api/status'
       );
 
+
     const d =
       await r.json();
+
 
     const online =
       d.status !== 'offline';
 
 
-    /*
-     * Penyebaran terakhir
-     */
-
     let lastFeedingHtml =
-      '<div ' +
-      'style="' +
+      '<div style="' +
       'margin-top:14px;' +
       'padding-top:14px;' +
       'border-top:1px solid #e7ebf0' +
       '">';
+
 
     lastFeedingHtml +=
       '<b>Penyebaran Pakan Terakhir</b>';
@@ -1341,38 +1637,44 @@ async function loadStatus(){
           'id-ID'
         );
 
+
       lastFeedingHtml +=
         '<br>' +
         '<span class="small">' +
         lastTime +
         '</span>';
 
+
       lastFeedingHtml +=
         '<br>Kecepatan: ' +
-        (d.lastFeeding.speed || 0) +
+        (
+          d.lastFeeding.speed || 0
+        ) +
         '%';
+
 
       lastFeedingHtml +=
         '<br>Durasi: ' +
-        (d.lastFeeding.duration || 0) +
+        (
+          d.lastFeeding.duration || 0
+        ) +
         ' detik';
 
-    }else{
+
+    } else {
 
       lastFeedingHtml +=
         '<br>' +
         '<span class="small">' +
         'Belum ada penyebaran pakan' +
         '</span>';
+
     }
+
 
     lastFeedingHtml +=
       '</div>';
 
-
-    /*
-     * Status utama
-     */
 
     document
       .getElementById('status')
@@ -1401,123 +1703,185 @@ async function loadStatus(){
       lastFeedingHtml;
 
 
-  }catch(e){
+  } catch(e){
 
     document
       .getElementById('status')
       .textContent =
       'Gagal mengambil status';
+
   }
+
 }
 
 
 /*
- * ==========================================================
- * LOAD JADWAL
- * ==========================================================
- */
+===========================================================
+LOAD SCHEDULE
+===========================================================
+*/
 
 async function loadSchedules(){
 
-  const r =
-    await fetch(
-      '/api/schedules'
-    );
+  try{
 
-  const data =
-    await r.json();
-
-
-  document
-    .getElementById(
-      'scheduleList'
-    )
-    .innerHTML =
-
-    data.map(
-      (s,i) => `
-
-      <div class="schedule">
-
-        <h3>
-          Jadwal ${i+1}
-        </h3>
-
-        <div class="switch">
-
-          <input
-            id="aktif${i}"
-            type="checkbox"
-            ${s.aktif ? 'checked' : ''}
-          >
-
-          <span>
-            Aktif
-          </span>
-
-        </div>
+    const r =
+      await fetch(
+        '/api/schedules'
+      );
 
 
-        <label>
-          Waktu
-        </label>
-
-        <input
-          id="time${i}"
-          type="time"
-          value="${s.time}"
-        >
+    const data =
+      await r.json();
 
 
-        <label>
-          Kecepatan Motor (%)
-        </label>
+    const html =
+      data.map(
+        function(s, i){
 
-        <input
-          id="speed${i}"
-          type="number"
-          min="10"
-          max="100"
-          value="${s.speed}"
-        >
+          return `
 
+<div class="schedule">
 
-        <label>
-          Durasi Motor (detik)
-        </label>
-
-        <input
-          id="duration${i}"
-          type="number"
-          min="1"
-          max="3600"
-          value="${s.duration}"
-        >
+<h3>
+Jadwal ${i + 1}
+</h3>
 
 
-        <button
-          class="action save"
-          style="margin-top:14px"
-          onclick="simpanJadwal(${i})"
-        >
-          Simpan Jadwal
-        </button>
+<div class="switch">
 
-      </div>
+<input
+  id="aktif${i}"
+  type="checkbox"
+  ${s.aktif ? 'checked' : ''}
+>
 
-      `
-    )
-    .join('');
+<span>
+Aktif
+</span>
+
+</div>
+
+
+<label>
+Waktu
+</label>
+
+<input
+  id="time${i}"
+  type="time"
+  value="${s.time}"
+>
+
+
+<label>
+Kecepatan Motor (%)
+</label>
+
+<input
+  id="speed${i}"
+  type="number"
+  min="10"
+  max="100"
+  value="${s.speed}"
+>
+
+
+<label>
+Durasi Motor (detik)
+</label>
+
+<input
+  id="duration${i}"
+  type="number"
+  min="1"
+  max="3600"
+  value="${s.duration}"
+>
+
+
+<button
+  class="action save"
+  style="margin-top:14px"
+  onclick="simpanJadwal(${i})"
+>
+Simpan Jadwal
+</button>
+
+
+</div>
+
+`;
+
+        }
+      ).join('');
+
+
+    document
+      .getElementById(
+        'scheduleList'
+      )
+      .innerHTML =
+      html;
+
+
+  } catch(e){
+
+    document
+      .getElementById(
+        'scheduleList'
+      )
+      .textContent =
+      'Gagal mengambil jadwal.';
+
+  }
+
 }
 
 
 /*
- * ==========================================================
- * SIMPAN JADWAL
- * ==========================================================
- */
+===========================================================
+SIMPAN JADWAL
+===========================================================
+*/
 
 async function simpanJadwal(i){
+
+  const aktif =
+    document
+      .getElementById(
+        'aktif' + i
+      )
+      .checked;
+
+
+  const time =
+    document
+      .getElementById(
+        'time' + i
+      )
+      .value;
+
+
+  const speed =
+    Number(
+      document
+        .getElementById(
+          'speed' + i
+        )
+        .value
+    );
+
+
+  const duration =
+    Number(
+      document
+        .getElementById(
+          'duration' + i
+        )
+        .value
+    );
+
 
   const payload = {
 
@@ -1525,80 +1889,76 @@ async function simpanJadwal(i){
       i,
 
     aktif:
-      document
-        .getElementById(
-          'aktif' + i
-        )
-        .checked,
+      aktif,
 
     time:
-      document
-        .getElementById(
-          'time' + i
-        )
-        .value,
+      time,
 
     speed:
-      Number(
-        document
-          .getElementById(
-            'speed' + i
-          )
-          .value
-      ),
+      speed,
 
     duration:
-      Number(
-        document
-          .getElementById(
-            'duration' + i
-          )
-          .value
-      )
+      duration
+
   };
 
 
-  const r =
-    await fetch(
-      '/api/schedule',
-      {
-        method:'POST',
+  try{
 
-        headers:{
-          'Content-Type':
-            'application/json'
-        },
+    const r =
+      await fetch(
+        '/api/schedule',
+        {
 
-        body:
-          JSON.stringify(
-            payload
-          )
-      }
+          method:'POST',
+
+          headers:{
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(
+              payload
+            )
+
+        }
+      );
+
+
+    const d =
+      await r.json();
+
+
+    alert(
+      d.message ||
+      'Jadwal disimpan'
     );
 
 
-  const d =
-    await r.json();
+    if(d.success){
+
+      loadSchedules();
+
+    }
 
 
-  alert(
-    d.message ||
-    'Jadwal disimpan'
-  );
+  } catch(e){
 
+    alert(
+      'Gagal menyimpan jadwal'
+    );
 
-  if(d.success){
-
-    loadSchedules();
   }
+
 }
 
 
 /*
- * ==========================================================
- * LOAD HISTORY
- * ==========================================================
- */
+===========================================================
+LOAD HISTORY
+===========================================================
+*/
 
 async function loadHistory(){
 
@@ -1609,8 +1969,74 @@ async function loadHistory(){
         '/api/history'
       );
 
+
     const data =
       await r.json();
+
+
+    if(!data.length){
+
+      document
+        .getElementById(
+          'historyList'
+        )
+        .innerHTML =
+        'Belum ada histori.';
+
+      return;
+    }
+
+
+    const html =
+      data.map(
+        function(h){
+
+          const time =
+            new Date(
+              h.time
+            ).toLocaleString(
+              'id-ID'
+            );
+
+
+          const source =
+            h.source
+              ? h.source + ' • '
+              : '';
+
+
+          return `
+
+<div class="history-item">
+
+<b>
+${time}
+</b>
+
+<br>
+
+Kecepatan:
+${h.speed}%
+
+<br>
+
+Durasi:
+${h.duration} detik
+
+<br>
+
+<span class="small">
+
+${source}${h.status || ''}
+
+</span>
+
+</div>
+
+`;
+
+        }
+      ).join('');
 
 
     document
@@ -1618,59 +2044,10 @@ async function loadHistory(){
         'historyList'
       )
       .innerHTML =
-
-      data.length
-
-        ? data.map(
-            h => `
-
-            <div class="history-item">
-
-              <b>
-                ${
-                  new Date(
-                    h.time
-                  ).toLocaleString(
-                    'id-ID'
-                  )
-                }
-              </b>
-
-              <br>
-
-              Kecepatan:
-              ${h.speed}%
-
-              <br>
-
-              Durasi:
-              ${h.duration} detik
-
-              <br>
-
-              <span class="small">
-
-                ${
-                  h.source
-                    ? h.source + ' • '
-                    : ''
-                }
-
-                ${
-                  h.status || ''
-                }
-
-              </span>
-
-            </div>
-
-            `
-          ).join('')
-
-        : 'Belum ada histori.';
+      html;
 
 
-  }catch(e){
+  } catch(e){
 
     document
       .getElementById(
@@ -1678,22 +2055,26 @@ async function loadHistory(){
       )
       .textContent =
       'Belum ada histori.';
+
   }
+
 }
 
 
 /*
- * ==========================================================
- * LOAD STATUS PERTAMA KALI
- * ==========================================================
- */
+===========================================================
+LOAD AWAL
+===========================================================
+*/
 
 loadStatus();
 
 
 /*
- * Update status setiap 5 detik.
- */
+===========================================================
+UPDATE STATUS SETIAP 5 DETIK
+===========================================================
+*/
 
 setInterval(
   loadStatus,
@@ -1705,14 +2086,15 @@ setInterval(
 </body>
 
 </html>`);
+
 });
 
 
 /*
- * ============================================================
- * START SERVER
- * ============================================================
- */
+============================================================
+START SERVER
+============================================================
+*/
 
 app.listen(
   PORT,
@@ -1722,5 +2104,6 @@ app.listen(
     console.log(
       `Server berjalan di port ${PORT}`
     );
+
   }
 );
